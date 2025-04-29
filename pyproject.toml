@@ -1,0 +1,11 @@
+[project]
+name = "video-processor"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13.3"
+dependencies = [
+    "bilitool>=0.1.3",
+    "dmconvert>=0.0.4",
+    "schedule>=1.2.2",
+]

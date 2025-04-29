@@ -1,0 +1,10 @@
+source: "https://www.douyu.com/251783"
+title: "银剑君直播录像{time}弹幕版"
+desc: |
+      银剑君的精彩直播录像！
+      主播直播间地址：https://www.douyu.com/251783
+      欢迎关注！
+tid: 171 # the type id of video
+tag: "银剑君,直播录像,游戏实况"
+cover: '' # the cover of video (if you want to customize, set it as the path to your cover image)
+dynamic: '' # the dynamic information of video
