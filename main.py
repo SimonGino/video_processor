@@ -48,13 +48,6 @@ def load_yaml_config():
             # 检查 title 模板是否包含 {time} (可选检查)
             if '{time}' not in yaml_config.get('title', ''):
                  logging.warning(f"配置文件中的 'title' ('{yaml_config.get('title')}') 不包含 '{{time}}' 占位符。将使用固定标题。")
-            # 读取删除设置，默认为 False (不删除)
-            # yaml_config['delete_uploaded_files'] = yaml_config.get('delete_uploaded_files', False)
-            # if yaml_config['delete_uploaded_files']:
-            #      logging.info("配置了上传成功后删除本地 MP4 文件。")
-            # else:
-            #      logging.info("配置了上传成功后保留本地 MP4 文件。")
-            # 删除逻辑移至 config.py
 
             return True
             
@@ -205,6 +198,17 @@ def convert_danmaku():
             # 假设 convert_xml_to_ass 成功时不抛出异常
             if os.path.exists(ass_file):
                  logging.info(f"成功转换: {os.path.basename(ass_file)}")
+                 
+                 # 删除XML文件 (根据配置决定是否删除)
+                 if config.DELETE_UPLOADED_FILES:
+                     try:
+                         os.remove(xml_file)
+                         logging.info(f"已删除原始 XML 文件: {os.path.basename(xml_file)} (根据配置)")
+                     except OSError as e:
+                         logging.warning(f"删除 XML 文件 {os.path.basename(xml_file)} 失败: {e}")
+                 else:
+                     logging.info(f"保留原始 XML 文件: {os.path.basename(xml_file)} (根据配置)")
+                 
                  converted_count += 1
             else:
                  logging.error(f"转换函数执行完毕但未找到输出文件: {os.path.basename(ass_file)}")
@@ -306,11 +310,16 @@ def encode_video():
                     if config.DELETE_UPLOADED_FILES:
                         os.remove(flv_file)
                         logging.info(f"已删除原始 FLV: {os.path.basename(flv_file)} (根据配置)")
+                        
+                        if os.path.exists(ass_file):
+                            os.remove(ass_file)
+                            logging.info(f"已删除原始 ASS: {os.path.basename(ass_file)} (根据配置)")
                     else:
                         logging.info(f"保留原始 FLV: {os.path.basename(flv_file)} (根据配置)")
-                    if os.path.exists(ass_file):
-                        os.remove(ass_file)
-                        logging.info(f"已删除原始 ASS: {os.path.basename(ass_file)}")
+                        
+                        if os.path.exists(ass_file):
+                            logging.info(f"保留原始 ASS: {os.path.basename(ass_file)} (根据配置)")
+                    
                     encoded_count += 1 # 只有完全成功才计数
                 except OSError as e:
                     logging.warning(f"移动文件成功，但删除原始文件时出错 ({os.path.basename(flv_file)} / {os.path.basename(ass_file)}): {e}")
@@ -475,72 +484,104 @@ def upload_to_bilibili():
                  logging.warning(f"无法从文件名 {base_filename} 解析日期或格式化标题: {e}。将使用 config.yaml 中的原始 title: '{title_template}'")
                  title = title_template # 解析失败，使用原始模板标题
 
-            logging.info(f"准备上传第一个视频 (创建稿件): {base_filename}")
-            logging.info(f"  标题: {title}") 
-            logging.info(f"  分区: {tid}")
-            logging.info(f"  标签: {tag}")
-
-            # --- 关键: 调用上传接口 --- 
-            # 假设 upload_video_entry 使用 yaml_config 中的信息，但仍需传递路径和部分参数
-            upload_result = upload_controller.upload_video_entry(
-                video_path=first_video_path,
-                # 不再传递 yaml 路径，假设 biliup 内部处理或不再需要
-                yaml=None, # 恢复传递 yaml 路径
+            # --- 在上传前检查是否已经存在相同标题的视频 ---
+            try:
+                feed_controller = FeedController()
+                status_to_check = 'pubed'
+                logging.info(f"上传前检查是否已存在相同标题的视频: {title}")
+                video_list_data = feed_controller.get_video_dict_info(size=20, status_type=status_to_check)
                 
-                tid=tid,
-                title=title, # 使用上面生成的标题
-                copyright=2, # 添加 copyright 参数，1 表示自制
-                desc=desc,
-                tag=tag,
-                source=source,
-                cover=cover,
-                dynamic=dynamic,
-                cdn=cdn # 使用从 yaml 读取的 CDN
-            )
+                # 检查是否已存在相同标题的视频
+                existing_bvid = None
+                if video_list_data and isinstance(video_list_data, dict):
+                    for video_title, video_bvid in video_list_data.items():
+                        if video_title == title:
+                            existing_bvid = video_bvid
+                            logging.info(f"找到已存在的相同标题视频: {title}, BVID: {existing_bvid}")
+                            break
+                
+                if existing_bvid:
+                    logging.info(f"已存在相同标题的视频 (BVID: {existing_bvid})，跳过所有上传操作")
+                    return  # 直接返回，结束整个上传流程
+                else:
+                    logging.info(f"未找到相同标题的视频，将上传新视频")
+            except Exception as e:
+                logging.error(f"检查已存在视频时出错: {e}", exc_info=True)
+                # 继续上传流程
+            
+            # 如果没有找到已存在的视频，则执行上传
+            if not first_video_uploaded_successfully:
+                logging.info(f"准备上传第一个视频 (创建稿件): {base_filename}")
+                logging.info(f"  标题: {title}") 
+                logging.info(f"  分区: {tid}")
+                logging.info(f"  标签: {tag}")
 
-            # --- 处理上传结果并尝试获取 BVID --- 
-            if upload_result:
-                logging.info(f"成功上传第一个视频: {upload_result}") # 使用 upload_result 记录，虽然它可能只是 True
-                uploaded_count += 1
-                first_video_uploaded_successfully = True
+                # --- 关键: 调用上传接口 --- 
+                # 假设 upload_video_entry 使用 yaml_config 中的信息，但仍需传递路径和部分参数
+                upload_result = upload_controller.upload_video_entry(
+                    video_path=first_video_path,
+                    # 不再传递 yaml 路径，假设 biliup 内部处理或不再需要
+                    yaml=None, # 恢复传递 yaml 路径
+                    
+                    tid=tid,
+                    title=title, # 使用上面生成的标题
+                    copyright=2, # 添加 copyright 参数，1 表示自制
+                    desc=desc,
+                    tag=tag,
+                    source=source,
+                    cover=cover,
+                    dynamic=dynamic,
+                    cdn=cdn # 使用从 yaml 读取的 CDN
+                )
 
-                # --- 尝试通过调用 get_video_dict_info 获取 BVID --- 
-                bvid = None # 明确 bvid 初始为 None
-                logging.info("第一个视频上传成功，尝试调用 API 查询最新投稿 BVID...")
-                try:
-                    feed_controller = FeedController() # 假设不需要 cookies_path
-                    # 查询状态可以根据需要调整，例如 'is_pubing,pubed' 可能更适合刚上传的视频
-                    status_to_check = 'pubed,not_pubed,is_pubing' 
-                    logging.info(f"调用 get_video_dict_info(size=1, status_type='{status_to_check}')")
-                    video_list_data = feed_controller.get_video_dict_info(size=1, status_type=status_to_check)
-                    logging.info(f"API 返回的视频列表数据: {video_list_data}") # 打印返回结果
+                # --- 处理上传结果并尝试获取 BVID --- 
+                if upload_result:
+                    logging.info(f"成功上传第一个视频: {upload_result}") # 使用 upload_result 记录，虽然它可能只是 True
+                    uploaded_count += 1
+                    first_video_uploaded_successfully = True
 
-                    # 解析返回的字典
-                    if video_list_data and isinstance(video_list_data, dict) and len(video_list_data) > 0:
-                         # 假设字典的第一个值就是最新的 BVID
-                         potential_bvid = list(video_list_data.values())[0]
-                         if isinstance(potential_bvid, str) and potential_bvid.startswith('BV'):
-                              bvid = potential_bvid
-                              logging.info(f"成功从 API 获取到最新投稿 BVID: {bvid}")
-                         else:
-                              logging.warning(f"从 API 返回的数据中未能提取有效的 BVID (第一个值: {potential_bvid})。")
-                    else:
-                         logging.warning(f"API 返回的数据不是预期的非空字典 ({video_list_data})，无法获取 BVID。")
+                    # --- 尝试通过调用 get_video_dict_info 获取 BVID --- 
+                    bvid = None # 明确 bvid 初始为 None
+                    logging.info("第一个视频上传成功，等待10秒后尝试调用 API 查询最新投稿 BVID...")
+                    
+                    # 等待10秒，确保API能够返回最新上传的视频信息
+                    time.sleep(10)
+                    
+                    try:
+                        feed_controller = FeedController() # 假设不需要 cookies_path
+                        # 查询状态可以根据需要调整，例如 'is_pubing,pubed' 可能更适合刚上传的视频
+                        status_to_check = 'is_pubing' 
+                        logging.info(f"调用 get_video_dict_info(size=10, status_type='{status_to_check}')")
+                        video_list_data = feed_controller.get_video_dict_info(size=10, status_type=status_to_check)
+                        logging.info(f"API 返回的视频列表数据: {video_list_data}") # 打印返回结果
 
-                except AttributeError:
-                    logging.error("`bilitool` 的 FeedController 中似乎没有找到 `get_video_dict_info` 方法。无法查询 BVID。")
-                except Exception as e:
-                     logging.error(f"调用 get_video_dict_info 或解析结果时出错: {e}", exc_info=True)
+                        # 通过标题匹配查找BVID
+                        if video_list_data and isinstance(video_list_data, dict):
+                            for video_title, video_bvid in video_list_data.items():
+                                if video_title == title and isinstance(video_bvid, str) and video_bvid.startswith('BV'):
+                                    bvid = video_bvid
+                                    logging.info(f"通过标题匹配成功获取BVID: {bvid}, 标题: {title}")
+                                    break
+                            
+                            if not bvid:
+                                logging.warning(f"在返回的视频列表中未找到标题为 '{title}' 的视频，无法获取BVID")
+                        else:
+                            logging.warning(f"API 返回的数据不是预期的非空字典 ({video_list_data})，无法获取 BVID。")
 
-                # 如果未能获取 BVID，记录警告
-                if not bvid:
-                     logging.warning("未能自动获取 BVID。将无法追加分P，后续文件将尝试独立上传。")
-                 
-                 # 后续逻辑会根据 bvid 是否被成功赋值来决定是否追加
+                    except AttributeError:
+                        logging.error("`bilitool` 的 FeedController 中似乎没有找到 `get_video_dict_info` 方法。无法查询 BVID。")
+                    except Exception as e:
+                        logging.error(f"调用 get_video_dict_info 或解析结果时出错: {e}", exc_info=True)
 
-            else:
-                 logging.error(f"上传第一个视频失败 (返回值为 {upload_result}) : {base_filename}")
-                 error_count += 1 # 第一个失败，算作错误
+                    # 如果未能获取 BVID，记录警告
+                    if not bvid:
+                        logging.warning("未能自动获取 BVID。将无法追加分P，后续文件将尝试独立上传。")
+                    
+                    # 后续逻辑会根据 bvid 是否被成功赋值来决定是否追加
+
+                else:
+                    logging.error(f"上传第一个视频失败 (返回值为 {upload_result}) : {base_filename}")
+                    error_count += 1 # 第一个失败，算作错误
 
         except Exception as e:
             # 捕获所有上传过程中的异常，包括可能的 biliup 内部错误
