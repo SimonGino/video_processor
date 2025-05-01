@@ -41,6 +41,16 @@ SCHEDULE_INTERVAL_MINUTES = 60
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
 DELETE_UPLOADED_FILES = False
 
+# --- API 配置 ---
+# API 服务器基础 URL
+API_BASE_URL = "http://localhost:50009"
+# API 服务器是否已启动 (如果为 False，将跳过依赖 API 的功能)
+API_ENABLED = True
+
+# --- 主播配置 ---
+# 默认主播名称 (用于记录直播场次和查询 BVID)
+DEFAULT_STREAMER_NAME = "银剑君"
+
 # --- 其他 ---
 # 确保处理和上传目录存在
 os.makedirs(PROCESSING_FOLDER, exist_ok=True)
