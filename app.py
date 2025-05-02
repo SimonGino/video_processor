@@ -120,18 +120,18 @@ async def scheduled_video_pipeline():
     loop = asyncio.get_running_loop()
     start_time = time.time()
 
-    # # --- 1. 同步处理任务 (在线程池中运行避免阻塞) ---
-    # try:
-    #     scheduler_logger.info("定时任务：执行文件清理...")
-    #     await loop.run_in_executor(None, cleanup_small_files) # None 使用默认 ThreadPoolExecutor
-    #     scheduler_logger.info("定时任务：执行弹幕转换...")
-    #     await loop.run_in_executor(None, convert_danmaku)
-    #     scheduler_logger.info("定时任务：执行视频压制...")
-    #     await loop.run_in_executor(None, encode_video)
-    #     scheduler_logger.info("定时任务：同步处理任务完成。")
-    # except Exception as e:
-    #     scheduler_logger.error(f"定时任务：同步处理任务执行过程中出错: {e}", exc_info=True)
-    #     # 即使同步任务出错，仍然尝试执行异步任务
+    # --- 1. 同步处理任务 (在线程池中运行避免阻塞) ---
+    try:
+        scheduler_logger.info("定时任务：执行文件清理...")
+        await loop.run_in_executor(None, cleanup_small_files) # None 使用默认 ThreadPoolExecutor
+        scheduler_logger.info("定时任务：执行弹幕转换...")
+        await loop.run_in_executor(None, convert_danmaku)
+        scheduler_logger.info("定时任务：执行视频压制...")
+        await loop.run_in_executor(None, encode_video)
+        scheduler_logger.info("定时任务：同步处理任务完成。")
+    except Exception as e:
+        scheduler_logger.error(f"定时任务：同步处理任务执行过程中出错: {e}", exc_info=True)
+        # 即使同步任务出错，仍然尝试执行异步任务
 
     # --- 2. 异步上传和BVID更新任务 ---
     # 需要创建独立的 DB Session
