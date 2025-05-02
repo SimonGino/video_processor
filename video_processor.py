@@ -378,38 +378,53 @@ def encode_video():
 
 
 async def upload_to_bilibili(db: AsyncSession):
-    """上传 UPLOAD_FOLDER 中的 MP4 文件到 Bilibili，基于直播场次判断是首次上传还是分P上传 (直接操作数据库)"""
-    global yaml_config # 确保能访问全局配置
-    if not yaml_config: # 如果配置加载失败，则不执行上传
-         logging.error("Bilibili 上传配置 (config.yaml) 未成功加载，跳过上传步骤。")
-         return
+    """上传 UPLOAD_FOLDER 中的 MP4 文件到 Bilibili
+    
+    逻辑说明:
+    1. 获取待上传文件夹中的所有MP4文件
+    2. 与数据库对比，筛选出尚未上传的视频
+    3. 根据直播场次(时间段)对视频分组
+    4. 对每个时间段：
+       - 时间段内的第一个视频使用upload_video_entry创建新稿件
+       - 获取到BVID后，才能对该时间段的其他视频使用append_video_entry追加分P
+    5. 如果无法获取BVID，该时间段所有视频暂不上传，等待下次运行
+    """
+    global yaml_config
+    if not yaml_config:
+        logging.error("Bilibili 上传配置 (config.yaml) 未成功加载，跳过上传步骤。")
+        return
 
     logging.info("开始检查并上传视频到 Bilibili...")
     uploaded_count = 0
     error_count = 0
-    files_processed = 0
-
+    
     # 1. 检查登录状态
     try:
         login_controller = LoginController() 
         if not login_controller.check_bilibili_login():
             logging.error("Bilibili 登录验证失败，请检查 cookies.json 文件是否有效或已生成。")
-            return # 登录失败则不继续上传
+            return
         logging.info("Bilibili 登录验证成功。")
     except Exception as e:
         logging.error(f"检查 Bilibili 登录状态时出错: {e}")
         return
-
-    # 2. 查找并排序待上传的视频
+    
+    if not config.API_ENABLED:
+        logging.error("API 功能未配置或明确禁用，无法执行上传")
+        return
+    
+    upload_controller = UploadController()
+    feed_controller = FeedController()
+    
+    # 2. 获取所有待上传的视频文件并按时间戳排序
     mp4_files = glob.glob(os.path.join(config.UPLOAD_FOLDER, "*.mp4"))
-
     if not mp4_files:
         logging.info("在上传目录中没有找到 MP4 文件，无需上传。")
         return
-
-    files_processed = len(mp4_files)
-
-    # --- 按文件名中的时间戳排序 --- 
+    
+    logging.info(f"上传目录中共找到 {len(mp4_files)} 个 MP4 文件")
+    
+    # 按文件名中的时间戳排序
     def get_timestamp_from_filename(filepath):
         filename = os.path.basename(filepath)
         try:
@@ -418,331 +433,367 @@ async def upload_to_bilibili(db: AsyncSession):
             return datetime.strptime(timestamp_str, '%Y-%m-%d %H_%M_%S')
         except (IndexError, ValueError) as e:
             logging.warning(f"无法从文件名 {filename} 解析时间戳: {e}，将影响排序。")
-            return datetime.min 
-
-    try:
-        mp4_files.sort(key=get_timestamp_from_filename)
-        logging.info(f"找到 {files_processed} 个待上传文件，已按时间顺序排序：")
-        for f in mp4_files:
-            logging.info(f"  - {os.path.basename(f)}")
-    except Exception as e:
-        logging.error(f"根据时间戳排序文件时出错: {e}，将按默认顺序处理。")
-
-    # 3. 确定这些文件所属的直播场次
-    if not config.API_ENABLED:
-        logging.error("API 功能未配置或明确禁用，无法执行上传") # 之前的检查挪到这里
-        return
-        
-    try:
-        streamer_name = config.DEFAULT_STREAMER_NAME
-        current_session_files = []
-        
-        # 获取最近的直播场次信息 (直接查询数据库)
-        session_query = select(StreamSession).filter(
-            StreamSession.streamer_name == streamer_name
-        ).order_by(desc(StreamSession.end_time)).limit(1)
-        session_result = await db.execute(session_query)
-        latest_session_obj = session_result.scalars().first()
-        
-        if not latest_session_obj:
-            logging.warning(f"主播 {streamer_name} 没有下播记录，无法确定直播场次")
-            return
-            
-        # 获取最后一次下播时间
-        last_end_time = latest_session_obj.end_time
-        current_time = datetime.now()
-        
-        logging.info(f"当前直播场次时间范围: {last_end_time} 到 {current_time} (当前时间)")
-        
-        # 筛选属于当前直播场次的文件 (最后一次下播后的文件)
-        for file_path in mp4_files:
-            file_name = os.path.basename(file_path)
-            # 从文件名解析时间
-            try:
-                timestamp_str = os.path.splitext(file_name)[0].split('录播')[-1].replace('T', ' ')
-                file_timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H_%M_%S')
-                
-                # 检查文件是否在当前场次时间范围内 (最后一次下播之后到现在)
-                is_current = file_timestamp > last_end_time and file_timestamp <= current_time
-                
-                if is_current:
-                    # 检查文件是否已上传 (直接查询数据库)
-                    check_query = select(UploadedVideo).filter(UploadedVideo.first_part_filename == file_name)
-                    check_result_db = await db.execute(check_query)
-                    existing_upload = check_result_db.scalars().first()
-                    
-                    if existing_upload:
-                        logging.info(f"文件 {file_name} 已上传 (BVID: {existing_upload.bvid})，跳过")
-                    else:
-                        current_session_files.append(file_path)
-                        logging.info(f"找到当前直播场次未上传的文件: {file_name}")
-                else:
-                    logging.info(f"文件 {file_name} 不在当前直播场次时间范围内，跳过")
-            except Exception as e:
-                logging.error(f"解析文件 {file_name} 的时间戳时出错: {e}")
-                # 出错的文件不处理
-                
-        if not current_session_files:
-            logging.info("未找到当前直播场次需要上传的文件，结束上传流程")
-            return
-            
-        # 更新待处理文件
-        mp4_files = current_session_files
-        files_processed = len(mp4_files)
-        logging.info(f"当前直播场次需要上传的文件: {files_processed} 个")
-        
-    except Exception as e:
-        logging.error(f"确定直播场次信息时出错: {e}")
-        return
-
-    # 4. 检查当前直播场次是否已有上传视频
-    upload_controller = UploadController()
-    feed_controller = FeedController()
-    existing_bvid_for_session = None
+            return datetime.min
     
     try:
-        # 查询数据库获取当前直播场次对应的最新上传记录（如果有BVID的话）
-        latest_upload_query = select(UploadedVideo).order_by(desc(UploadedVideo.upload_time)).limit(1)
-        latest_upload_result = await db.execute(latest_upload_query)
-        latest_upload_obj = latest_upload_result.scalars().first()
-
-        if latest_upload_obj and latest_upload_obj.bvid:
-            # 需要进一步判断这个 latest_upload 是否属于当前场次
-            # (简单起见，我们假设最新的带 BVID 的记录就是当前场次的，
-            #  如果需要严格判断，可以比较 upload_time 和 last_end_time)
-            existing_bvid_for_session = latest_upload_obj.bvid
-            logging.info(f"当前直播场次已上传过视频，BVID: {existing_bvid_for_session}")
-        else:
-            logging.info("当前直播场次尚未上传或未成功获取BVID")
+        # 对所有MP4文件按时间戳排序
+        mp4_files.sort(key=get_timestamp_from_filename)
+    except Exception as e:
+        logging.error(f"根据时间戳排序文件时出错: {e}，将按默认顺序处理。")
+    
+    # 3. 筛选出已上传的文件，构建文件信息列表
+    video_info_list = []
+    already_uploaded_files = []
+    
+    for file_path in mp4_files:
+        file_name = os.path.basename(file_path)
+        timestamp = get_timestamp_from_filename(file_path)
+        
+        try:
+            # 检查数据库中是否有该文件的上传记录
+            query = select(UploadedVideo).filter(UploadedVideo.first_part_filename == file_name)
+            result = await db.execute(query)
+            existing_record = result.scalars().first()
             
-        # ============ 上传逻辑 ============ 
-        if existing_bvid_for_session:
-            # --- 情况 1: 追加分P --- 
-            bvid = existing_bvid_for_session
-            if mp4_files:
-                logging.info(f"将以分P形式追加 {len(mp4_files)} 个视频到 BVID: {bvid}")
+            if existing_record:
+                logging.info(f"文件 {file_name} 已有上传记录 (BVID: {existing_record.bvid or '未获取'})，跳过")
+                already_uploaded_files.append(file_path)
+            else:
+                video_info_list.append({
+                    'path': file_path,
+                    'filename': file_name,
+                    'timestamp': timestamp
+                })
+        except Exception as e:
+            logging.error(f"检查文件 {file_name} 是否已上传时出错: {e}")
+    
+    # 从待处理列表中移除已上传的文件
+    logging.info(f"已从待处理列表中移除 {len(already_uploaded_files)} 个已上传的文件")
+    if not video_info_list:
+        logging.info("没有未上传的视频文件，结束上传流程")
+        return
+    
+    logging.info(f"待上传的视频文件共 {len(video_info_list)} 个")
+    
+    # 4. 获取所有直播场次信息
+    try:
+        streamer_name = config.DEFAULT_STREAMER_NAME
+        sessions_query = select(StreamSession).filter(
+            StreamSession.streamer_name == streamer_name
+        ).order_by(StreamSession.end_time)
+        
+        sessions_result = await db.execute(sessions_query)
+        all_sessions = sessions_result.scalars().all()
+        
+        if not all_sessions:
+            logging.warning(f"主播 {streamer_name} 没有下播记录，无法划分直播场次")
+            return
+            
+        logging.info(f"获取到 {len(all_sessions)} 条直播场次记录")
+    except Exception as e:
+        logging.error(f"获取直播场次信息时出错: {e}")
+        return
+    
+    # 5. 根据直播场次将视频分组
+    # 创建时间段映射: 每个场次的结束时间到下一个场次的结束时间
+    session_ranges = []
+    for i in range(len(all_sessions) - 1):
+        current_session = all_sessions[i]
+        next_session = all_sessions[i + 1]
+        session_ranges.append({
+            'start_time': current_session.end_time,
+            'end_time': next_session.end_time,
+            'session_id': next_session.id
+        })
+    
+    # 添加最后一个场次到当前时间
+    if all_sessions:
+        last_session = all_sessions[-1]
+        session_ranges.append({
+            'start_time': last_session.end_time,
+            'end_time': datetime.now(),
+            'session_id': last_session.id
+        })
+    
+    # 将视频分配到对应的时间段
+    session_videos = {}
+    for video_info in video_info_list:
+        video_time = video_info['timestamp']
+        assigned = False
+        
+        for session_range in session_ranges:
+            if session_range['start_time'] < video_time <= session_range['end_time']:
+                session_id = session_range['session_id']
+                if session_id not in session_videos:
+                    session_videos[session_id] = []
                 
-                # 获取当前视频的P数，确定新的P号起点
-                # (这里依然简单处理，认为从1开始，实际应查询B站或数据库)
-                part_number = 1 
+                session_videos[session_id].append(video_info)
+                assigned = True
+                break
+        
+        if not assigned:
+            logging.warning(f"无法确定视频 {video_info['filename']} 所属的直播场次，将跳过上传")
+    
+    if not session_videos:
+        logging.info("没有视频能够匹配到任何直播场次，结束上传流程")
+        return
+    
+    logging.info(f"视频已分组到 {len(session_videos)} 个直播场次")
+    
+    # 6. 处理每个时间段的视频上传
+    for session_id, videos in session_videos.items():
+        if not videos:
+            continue
+        
+        # 对该时间段内的视频按时间排序
+        videos.sort(key=lambda x: x['timestamp'])
+        session_start_time = min(v['timestamp'] for v in videos)
+        formatted_date = session_start_time.strftime('%Y-%m-%d')
+        
+        logging.info(f"开始处理直播场次 ID:{session_id} ({formatted_date}) 的 {len(videos)} 个视频")
+        
+        # 查询该场次是否已有上传记录且有BVID
+        try:
+            # 找出该场次中第一个视频的文件名
+            first_video_filename = videos[0]['filename']
+            
+            # 查询数据库中是否有该场次第一个视频的上传记录
+            query = select(UploadedVideo).filter(
+                UploadedVideo.first_part_filename == first_video_filename
+            )
+            result = await db.execute(query)
+            existing_record = result.scalars().first()
+            
+            existing_bvid = None
+            if existing_record and existing_record.bvid:
+                existing_bvid = existing_record.bvid
+                logging.info(f"该直播场次已有上传记录，BVID: {existing_bvid}")
+        except Exception as e:
+            logging.error(f"查询场次 ID:{session_id} 上传记录时出错: {e}")
+            continue
+        
+        # 根据是否有BVID决定上传方式
+        if existing_bvid:
+            # --- 情况1: 追加分P ---
+            bvid = existing_bvid
+            logging.info(f"将以分P形式追加视频到 BVID: {bvid}")
+            
+            try:
+                # 查询该BVID已有多少分P，确定起始P号
+                # 这里简化处理，从数据库查询该BVID相关的文件数量
+                count_query = select(UploadedVideo).filter(
+                    UploadedVideo.bvid == bvid
+                )
+                count_result = await db.execute(count_query)
+                existing_files = count_result.scalars().all()
+                
+                # 设置起始P号，如果无法确定就从P2开始
+                start_part_number = len(existing_files) + 1 if existing_files else 2
+                
+                # 获取CDN参数
+                cdn = yaml_config.get('cdn')
                 
                 # 逐个追加视频
-                for video_path in mp4_files:
-                    file_name = os.path.basename(video_path)
+                part_number = start_part_number
+                for video_info in videos:
+                    file_path = video_info['path']
+                    file_name = video_info['filename']
+                    
+                    # 再次检查是否已上传（double check）
+                    recheck_query = select(UploadedVideo).filter(
+                        UploadedVideo.first_part_filename == file_name
+                    )
+                    recheck_result = await db.execute(recheck_query)
+                    if recheck_result.scalars().first():
+                        logging.info(f"二次检查: 文件 {file_name} 已上传，跳过")
+                        continue
+                    
+                    # 分P标题处理
                     try:
-                        # 分P标题处理
-                        part_time_str = ""
-                        try:
-                            part_base = os.path.splitext(file_name)[0]
-                            part_timestamp_str = part_base.split('录播')[-1].replace('T', ' ')
-                            part_dt_obj = datetime.strptime(part_timestamp_str, '%Y-%m-%d %H_%M_%S')
-                            part_time_str = part_dt_obj.strftime('%H:%M:%S')
-                        except Exception:
-                            part_time_str = f"Part {part_number}"
-
+                        video_time = video_info['timestamp']
+                        part_time_str = video_time.strftime('%H:%M:%S')
                         part_title = f"P{part_number} {part_time_str}"
-                        logging.info(f"准备追加分P ({part_title}): {file_name}")
+                    except Exception:
+                        part_title = f"P{part_number}"
+                    
+                    logging.info(f"准备追加分P ({part_title}): {file_name}")
+                    
+                    # 调用追加接口
+                    append_success = upload_controller.append_video_entry(
+                        video_path=file_path,
+                        bvid=bvid,
+                        cdn=cdn
+                    )
+                    
+                    if append_success:
+                        logging.info(f"成功追加分P: {file_name}")
+                        uploaded_count += 1
                         
-                        # 从配置获取CDN参数
-                        cdn = yaml_config.get('cdn')
-                        
-                        # 调用追加接口
-                        append_success = upload_controller.append_video_entry(
-                            video_path=video_path,
-                            bvid=bvid,
-                            cdn=cdn,
-                        )
-                        
-                        if append_success:
-                            logging.info(f"成功追加分P: {file_name}")
-                            uploaded_count += 1
+                        # 记录到数据库
+                        try:
+                            new_upload = UploadedVideo(
+                                bvid=bvid,
+                                title=f"{part_title} (分P)",
+                                first_part_filename=file_name
+                            )
+                            db.add(new_upload)
+                            await db.commit()
+                            logging.info(f"已将分P信息记录到数据库 (文件: {file_name}, BVID: {bvid})")
                             
-                            # 上传成功后处理文件
-                            try:
-                                if config.DELETE_UPLOADED_FILES:
-                                    os.remove(video_path)
-                                    logging.info(f"已删除已上传的视频: {file_name}")
-                            except OSError as e:
-                                logging.warning(f"删除已上传视频失败: {e}")
-                        else:
-                            logging.error(f"追加分P失败: {file_name}")
-                            error_count += 1
-                        
-                        part_number += 1
-                    except Exception as e:
-                        logging.error(f"处理视频 {file_name} 时出错: {e}")
-                        error_count += 1
-            else:
-                logging.info("没有文件需要追加")
-        else:
-            # --- 情况 2: 创建新稿件 --- 
-            if mp4_files:
-                logging.info("当前直播场次还未上传过视频，将创建新稿件")
-                
-                # 获取上传参数
-                try:
-                    tid = yaml_config['tid']
-                    tag = yaml_config['tag']
-                    source = yaml_config['source']
-                    cover = yaml_config['cover']
-                    dynamic = yaml_config['dynamic']
-                    video_desc = yaml_config['desc'] # 重命名变量
-                    title_template = yaml_config['title']
-                    cdn = yaml_config.get('cdn')  # 可选参数
-                except KeyError as e:
-                    logging.error(f"缺少必要的上传参数: {e}")
-                    return
-                
-                # 使用第一个文件创建稿件
-                first_video_path = mp4_files[0]
-                remaining_videos = mp4_files[1:]
-                
-                file_name = os.path.basename(first_video_path)
-                
-                # 生成标题
-                title = title_template  # 默认标题
-                try:
-                    # 从文件名解析时间
-                    file_base = os.path.splitext(file_name)[0]
-                    timestamp_str = file_base.split('录播')[-1].replace('T', ' ')
-                    dt_obj = datetime.strptime(timestamp_str, '%Y-%m-%d %H_%M_%S')
-                    formatted_time = dt_obj.strftime('%Y年%m月%d日 %H:%M')
-                    
-                    # 如果标题模板包含{time}，替换它
-                    if '{time}' in title_template:
-                        title = title_template.replace('{time}', formatted_time)
-                    elif remaining_videos:  # 有多个文件，使用合集标题
-                        title = f"{title_template} (合集 {dt_obj.strftime('%Y-%m-%d')})"
-                except Exception as e:
-                    logging.warning(f"生成标题时出错: {e}，使用默认标题: {title}")
-                
-                logging.info(f"上传首个视频，创建稿件。标题: {title}")
-                
-                # 调用上传接口
-                upload_result = upload_controller.upload_video_entry(
-                    video_path=first_video_path,
-                    yaml=None,
-                    tid=tid,
-                    title=title,
-                    copyright=2,
-                    desc=video_desc, # 使用重命名后的变量
-                    tag=tag,
-                    source=source,
-                    cover=cover,
-                    dynamic=dynamic,
-                    cdn=cdn
-                )
-                
-                if upload_result:
-                    logging.info(f"成功上传首个视频: {file_name}")
-                    uploaded_count += 1
-                    
-                    # 获取BVID并记录到数据库
-                    logging.info("上传成功，等待10秒后尝试获取BVID...")
-                    time.sleep(10)
-                    
-                    acquired_bvid = None # 用于存储获取到的BVID
-                    try:
-                        # 调用B站API获取BVID
-                        video_list_data = feed_controller.get_video_dict_info(size=10, status_type='is_pubing')
-                        
-                        # 查找匹配标题的视频
-                        if video_list_data and isinstance(video_list_data, dict):
-                            for video_title, video_bvid_from_api in video_list_data.items():
-                                if video_title == title and isinstance(video_bvid_from_api, str) and video_bvid_from_api.startswith('BV'):
-                                    acquired_bvid = video_bvid_from_api
-                                    logging.info(f"成功获取BVID: {acquired_bvid}")
-                                    break
-                    except Exception as e:
-                        logging.error(f"获取BVID时出错: {e}")
-                        
-                    # 上传成功后，记录到数据库 (使用获取到的 acquired_bvid)
-                    try:
-                        new_upload = UploadedVideo(
-                            bvid=acquired_bvid, # 使用获取到的BVID，可能为None
-                            title=title,
-                            first_part_filename=file_name
-                        )
-                        db.add(new_upload)
-                        await db.commit()
-                        await db.refresh(new_upload)
-                        
-                        if acquired_bvid:
-                            logging.info(f"已将视频信息记录到数据库 (标题: {title}, BVID: {acquired_bvid})")
-                            # 如果有剩余视频，需要用这个 BVID 去追加
-                            bvid = acquired_bvid 
-                        else:
-                            logging.info(f"已将视频信息记录到数据库 (标题: {title}, 暂无BVID)")
-                    except Exception as db_e:
-                        logging.error(f"将视频信息记录到数据库时出错: {db_e}")
-                        await db.rollback() # 记录数据库出错时回滚
-
-                    # 如果成功创建稿件并获取到 BVID，且有剩余视频，则追加
-                    if bvid and remaining_videos:
-                        logging.info(f"准备追加 {len(remaining_videos)} 个分P到 BVID: {bvid}")
-                        part_number = 2 # 从P2开始
-                        for video_path in remaining_videos:
-                            part_file_name = os.path.basename(video_path)
-                            try:
-                                # 分P标题处理
-                                part_time_str = ""
+                            # 处理文件
+                            if config.DELETE_UPLOADED_FILES:
                                 try:
-                                    part_base = os.path.splitext(part_file_name)[0]
-                                    part_timestamp_str = part_base.split('录播')[-1].replace('T', ' ')
-                                    part_dt_obj = datetime.strptime(part_timestamp_str, '%Y-%m-%d %H_%M_%S')
-                                    part_time_str = part_dt_obj.strftime('%H:%M:%S')
-                                except Exception:
-                                    part_time_str = f"Part {part_number}"
-                                    
-                                part_title = f"P{part_number} {part_time_str}"
-                                logging.info(f"追加分P ({part_title}): {part_file_name}")
-                                
-                                # 调用追加接口
-                                append_success = upload_controller.append_video_entry(
-                                    video_path=video_path,
-                                    bvid=bvid,
-                                    cdn=cdn,
-                                )
-                                
-                                if append_success:
-                                    logging.info(f"成功追加分P: {part_file_name}")
-                                    uploaded_count += 1
-                                    
-                                    # 处理文件
-                                    if config.DELETE_UPLOADED_FILES:
-                                        try:
-                                            os.remove(video_path)
-                                            logging.info(f"已删除已上传的视频: {part_file_name}")
-                                        except OSError as e:
-                                            logging.warning(f"删除已上传视频失败: {e}")
-                                else:
-                                    logging.error(f"追加分P失败: {part_file_name}")
-                                    error_count += 1
-                                
-                                part_number += 1
-                            except Exception as e:
-                                logging.error(f"处理分P {part_file_name} 时出错: {e}")
-                                error_count += 1
-
-                    # 处理第一个上传成功的文件
+                                    os.remove(file_path)
+                                    logging.info(f"已删除已上传的视频: {file_name}")
+                                except OSError as e:
+                                    logging.warning(f"删除已上传视频失败: {e}")
+                        except Exception as db_e:
+                            logging.error(f"将视频分P信息记录到数据库时出错: {db_e}")
+                            await db.rollback()
+                    else:
+                        logging.error(f"追加分P失败: {file_name}")
+                        error_count += 1
+                    
+                    part_number += 1
+            
+            except Exception as e:
+                logging.error(f"处理直播场次 ID:{session_id} 的追加分P时出错: {e}")
+                continue
+        
+        else:
+            # --- 情况2: 创建新稿件 ---
+            logging.info(f"该直播场次尚未上传视频，将创建新稿件")
+            
+            # 只处理第一个视频，创建新稿件
+            first_video_info = videos[0]
+            first_video_path = first_video_info['path']
+            first_video_filename = first_video_info['filename']
+            
+            # 获取上传参数
+            try:
+                tid = yaml_config['tid']
+                tag = yaml_config['tag']
+                source = yaml_config['source']
+                cover = yaml_config['cover']
+                dynamic = yaml_config['dynamic']
+                video_desc = yaml_config['desc']
+                title_template = yaml_config['title']
+                cdn = yaml_config.get('cdn')
+            except KeyError as e:
+                logging.error(f"缺少必要的上传参数: {e}")
+                continue
+            
+            # 生成标题
+            title = title_template
+            try:
+                # 从视频信息获取时间
+                video_time = first_video_info['timestamp']
+                formatted_time = video_time.strftime('%Y年%m月%d日 %H:%M')
+                
+                # 替换标题中的时间占位符
+                if '{time}' in title_template:
+                    title = title_template.replace('{time}', formatted_time)
+                elif len(videos) > 1:  # 有多个文件，使用合集标题
+                    title = f"{title_template} (合集 {video_time.strftime('%Y-%m-%d')})"
+            except Exception as e:
+                logging.warning(f"生成标题时出错: {e}，使用默认标题: {title}")
+            
+            logging.info(f"上传首个视频，创建稿件。标题: {title}")
+            
+            # 调用上传接口
+            upload_result = upload_controller.upload_video_entry(
+                video_path=first_video_path,
+                yaml=None,
+                tid=tid,
+                title=title,
+                copyright=2,
+                desc=video_desc,
+                tag=tag,
+                source=source,
+                cover=cover,
+                dynamic=dynamic,
+                cdn=cdn
+            )
+            
+            if upload_result:
+                logging.info(f"成功上传首个视频: {first_video_filename}")
+                uploaded_count += 1
+                
+                # 先将无BVID的记录存入数据库
+                try:
+                    new_upload = UploadedVideo(
+                        bvid=None,  # 先设为None
+                        title=title,
+                        first_part_filename=first_video_filename
+                    )
+                    db.add(new_upload)
+                    await db.commit()
+                    await db.refresh(new_upload)
+                    record_id = new_upload.id
+                    logging.info(f"已将视频信息记录到数据库 (ID: {record_id}, 标题: {title}, 暂无BVID)")
+                    
+                    # 处理文件
                     if config.DELETE_UPLOADED_FILES:
                         try:
                             os.remove(first_video_path)
-                            logging.info(f"已删除已上传的视频: {file_name}")
+                            logging.info(f"已删除已上传的视频: {first_video_filename}")
                         except OSError as e:
                             logging.warning(f"删除已上传视频失败: {e}")
-
-                else:
-                    logging.error(f"上传首个视频失败: {file_name}")
-                    error_count += 1
+                    
+                    # 等待获取BVID
+                    logging.info("上传成功，等待15秒后尝试获取BVID...")
+                    time.sleep(15)
+                    
+                    # 从B站API获取BVID
+                    acquired_bvid = None
+                    for attempt in range(3):  # 尝试最多3次
+                        try:
+                            # 调用B站API获取视频列表
+                            video_list_data = feed_controller.get_video_dict_info(size=10, status_type='is_pubing')
+                            
+                            # 查找匹配标题的视频
+                            if video_list_data and isinstance(video_list_data, dict):
+                                for video_title, video_bvid in video_list_data.items():
+                                    if video_title == title and isinstance(video_bvid, str) and video_bvid.startswith('BV'):
+                                        acquired_bvid = video_bvid
+                                        logging.info(f"成功获取BVID: {acquired_bvid}")
+                                        break
+                            
+                            # 如果在分P视频中找到了BVID，则更新数据库
+                            if acquired_bvid:
+                                # 更新数据库中的BVID
+                                new_upload.bvid = acquired_bvid
+                                await db.commit()
+                                logging.info(f"已更新数据库记录 ID:{record_id} 的BVID为 {acquired_bvid}")
+                                break  # 成功获取BVID，退出重试循环
+                            else:
+                                logging.warning(f"第 {attempt+1} 次尝试未获取到BVID，{5} 秒后重试...")
+                                time.sleep(5)  # 等待5秒后重试
+                                
+                        except Exception as api_e:
+                            logging.error(f"获取BVID时出错: {api_e}")
+                            time.sleep(5)  # 出错后等待5秒再重试
+                    
+                    # 如果获取不到BVID，则提示用户稍后再运行
+                    if not acquired_bvid:
+                        logging.warning("无法获取BVID，请等待B站处理完成后再运行程序，追加分P")
+                        # 此时数据库记录中的BVID仍为None，下次运行时会尝试更新
+                        continue # 结束本场次处理，不追加分P
+                    
+                    # 如果获取到BVID且该场次有多个视频，则继续追加
+                    # 因为已经花费了时间等待BVID，为确保上传完整性，本次就不继续上传分P
+                    # 下次程序运行时会使用已保存的BVID继续追加其他分P
+                    if len(videos) > 1:
+                        logging.info(f"已获取BVID: {acquired_bvid}，但为确保稳定性，将在下次运行时追加剩余的 {len(videos)-1} 个分P")
+                
+                except Exception as db_e:
+                    logging.error(f"将视频信息记录到数据库或获取BVID时出错: {db_e}")
+                    await db.rollback()
             else:
-                 logging.info("没有文件需要创建新稿件") # 添加日志
-                 
-    except Exception as e:
-        logging.error(f"上传过程中出错: {e}")
-        error_count += 1
-
-    logging.info(f"Bilibili 视频上传完成。共处理 {files_processed} 个文件，成功上传: {uploaded_count}，失败: {error_count}")
+                logging.error(f"上传首个视频失败: {first_video_filename}")
+                error_count += 1
+    
+    logging.info(f"Bilibili 视频上传完成。共处理 {len(video_info_list)} 个文件，成功上传: {uploaded_count}，失败: {error_count}")
 
 
 async def update_video_bvids(db: AsyncSession):

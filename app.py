@@ -5,6 +5,7 @@ import logging
 import argparse
 import threading
 import time
+import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional, List, AsyncGenerator
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from sqlalchemy import Column, Integer, String, DateTime, desc, select
 from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
 # 导入 video_processor.py 中的函数
@@ -36,7 +38,7 @@ from models import Base, StreamSession, UploadedVideo
 DATABASE_URL = f"sqlite+aiosqlite:///{os.path.dirname(os.path.abspath(__file__))}/app_data.db"
 
 # 创建异步引擎
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
+engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 
 # 创建异步会话工厂
 AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
@@ -91,6 +93,7 @@ class TaskResponse(BaseModel):
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("app")
+scheduler_logger = logging.getLogger("scheduler")
 
 # 创建 FastAPI 应用
 app = FastAPI(
@@ -108,7 +111,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 应用启动时初始化数据库和加载配置
+# --- 定时任务逻辑 ---
+scheduler = AsyncIOScheduler()
+
+async def scheduled_video_pipeline():
+    """定时执行的完整视频处理和上传流程"""
+    scheduler_logger.info("定时任务：开始执行视频处理和上传流程...")
+    loop = asyncio.get_running_loop()
+    start_time = time.time()
+
+    # # --- 1. 同步处理任务 (在线程池中运行避免阻塞) ---
+    # try:
+    #     scheduler_logger.info("定时任务：执行文件清理...")
+    #     await loop.run_in_executor(None, cleanup_small_files) # None 使用默认 ThreadPoolExecutor
+    #     scheduler_logger.info("定时任务：执行弹幕转换...")
+    #     await loop.run_in_executor(None, convert_danmaku)
+    #     scheduler_logger.info("定时任务：执行视频压制...")
+    #     await loop.run_in_executor(None, encode_video)
+    #     scheduler_logger.info("定时任务：同步处理任务完成。")
+    # except Exception as e:
+    #     scheduler_logger.error(f"定时任务：同步处理任务执行过程中出错: {e}", exc_info=True)
+    #     # 即使同步任务出错，仍然尝试执行异步任务
+
+    # --- 2. 异步上传和BVID更新任务 ---
+    # 需要创建独立的 DB Session
+    async with AsyncSessionLocal() as db:
+        try:
+            # 首先加载最新的YAML配置，以防手动修改过
+            if not load_yaml_config():
+                scheduler_logger.error("定时任务：无法加载 YAML 配置，跳过异步任务。")
+            else:
+                scheduler_logger.info("定时任务：执行 BVID 更新...")
+                await update_video_bvids(db)
+                scheduler_logger.info("定时任务：执行视频上传...")
+                await upload_to_bilibili(db)
+                scheduler_logger.info("定时任务：异步上传和BVID更新任务完成。")
+        except Exception as e:
+            scheduler_logger.error(f"定时任务：异步上传/BVID更新任务执行过程中出错: {e}", exc_info=True)
+        finally:
+            await db.close() # 确保会话关闭
+
+    end_time = time.time()
+    scheduler_logger.info(f"定时任务：视频处理和上传流程执行完毕。总耗时: {end_time - start_time:.2f} 秒。")
+
+# 应用启动时初始化数据库、加载配置并启动定时任务
 @app.on_event("startup")
 async def startup_event():
     logger.info("正在初始化数据库...")
@@ -117,9 +163,36 @@ async def startup_event():
     
     logger.info("正在加载 YAML 配置...")
     if not load_yaml_config():
-        logger.error("无法加载或验证配置文件 config.yaml，部分 API 可能无法正常工作")
+        logger.error("无法加载或验证配置文件 config.yaml，部分 API 和定时任务可能无法正常工作")
     else:
         logger.info("YAML 配置加载完成")
+
+    logger.info("正在启动定时任务调度器...")
+    try:
+        # 从 config 文件获取间隔时间
+        interval_minutes = config.SCHEDULE_INTERVAL_MINUTES
+        scheduler.add_job(
+            scheduled_video_pipeline, 
+            'interval', 
+            minutes=interval_minutes, 
+            id='video_pipeline_job', 
+            replace_existing=True,
+            next_run_time=datetime.now() # 应用启动后立即运行一次 (可选)
+        )
+        scheduler.start()
+        logger.info(f"定时任务调度器已启动，每 {interval_minutes} 分钟执行一次 'video_pipeline_job'。")
+    except Exception as e:
+        logger.error(f"启动定时任务调度器失败: {e}", exc_info=True)
+
+# 应用关闭时停止调度器
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("正在关闭定时任务调度器...")
+    if scheduler.running:
+        scheduler.shutdown()
+        logger.info("定时任务调度器已关闭。")
+    else:
+        logger.info("定时任务调度器未运行。")
 
 # =================== API 端点 ===================
 
@@ -367,28 +440,34 @@ def run_processing_sync():
 async def trigger_processing_tasks(background_tasks: BackgroundTasks):
     """触发后台执行清理、转换、压制任务"""
     background_tasks.add_task(run_processing_sync)
-    logger.info("已将视频处理任务添加到后台执行队列")
-    return {"message": "视频处理任务已开始在后台执行"}
+    logger.info("已将视频处理任务添加到后台执行队列 (手动触发)")
+    return {"message": "视频处理任务已开始在后台执行 (手动触发)"}
 
 async def run_upload_async(db: AsyncSession):
     """异步执行上传任务，用于后台任务"""
-    logger.info("后台任务：开始执行BVID更新和视频上传...")
+    logger.info("后台任务：开始执行BVID更新和视频上传 (手动触发)...")
     try:
+        if not load_yaml_config(): # 手动触发时也加载配置
+             logger.error("手动触发：无法加载 YAML 配置，跳过异步任务。")
+             return
         await update_video_bvids(db)
         await upload_to_bilibili(db) # 传递 db 会话
-        logger.info("后台任务：BVID更新和视频上传执行完成")
+        logger.info("后台任务：BVID更新和视频上传执行完成 (手动触发)")
     except Exception as e:
-        logger.error(f"后台任务：BVID更新和视频上传执行过程中出错: {e}")
+        logger.error(f"后台任务：BVID更新和视频上传执行过程中出错 (手动触发): {e}", exc_info=True)
+    # 注意：手动触发时，db session 由 FastAPI 管理，不需要手动 close
 
 @app.post("/run_upload_tasks", response_model=TaskResponse)
 async def trigger_upload_tasks(
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db) # 手动触发时从依赖注入获取 db
 ):
     """触发后台执行BVID更新和上传任务"""
-    background_tasks.add_task(run_upload_async, db)
-    logger.info("已将BVID更新和上传任务添加到后台执行队列")
-    return {"message": "BVID更新和上传任务已开始在后台执行"}
+    # 注意：这里传递的 db 是通过 Depends(get_db) 获取的 request-scoped session
+    # run_upload_async 需要能处理这种 session (它目前应该可以)
+    background_tasks.add_task(run_upload_async, db) 
+    logger.info("已将BVID更新和上传任务添加到后台执行队列 (手动触发)")
+    return {"message": "BVID更新和上传任务已开始在后台执行 (手动触发)"}
 
 # =================== 启动服务器 ===================
 
