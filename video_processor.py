@@ -8,7 +8,7 @@ import shlex
 import schedule
 import shutil
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 从同一目录导入配置和 Bilibili 工具
 import config
@@ -475,11 +475,12 @@ async def upload_to_bilibili(db: AsyncSession):
     
     logging.info(f"待上传的视频文件共 {len(video_info_list)} 个")
     
-    # 4. 获取所有直播场次信息
+    # 4. 获取所有直播场次信息（近三天）
     try:
         streamer_name = config.DEFAULT_STREAMER_NAME
         sessions_query = select(StreamSession).filter(
-            StreamSession.streamer_name == streamer_name
+            StreamSession.streamer_name == streamer_name,
+            StreamSession.end_time > datetime.now() - timedelta(days=3)
         ).order_by(StreamSession.end_time)
         
         sessions_result = await db.execute(sessions_query)
@@ -552,25 +553,22 @@ async def upload_to_bilibili(db: AsyncSession):
         
         logging.info(f"开始处理直播场次 ID:{session_id} ({formatted_date}) 的 {len(videos)} 个视频")
         
-        # 查询该场次是否已有上传记录且有BVID
-        try:
-            # 找出该场次中第一个视频的文件名
-            first_video_filename = videos[0]['filename']
-            
-            # 查询数据库中是否有该场次第一个视频的上传记录
-            query = select(UploadedVideo).filter(
-                UploadedVideo.first_part_filename == first_video_filename
-            )
-            result = await db.execute(query)
-            existing_record = result.scalars().first()
-            
-            existing_bvid = None
-            if existing_record and existing_record.bvid:
-                existing_bvid = existing_record.bvid
-                logging.info(f"该直播场次已有上传记录，BVID: {existing_bvid}")
-        except Exception as e:
-            logging.error(f"查询场次 ID:{session_id} 上传记录时出错: {e}")
-            continue
+        # 获取该时间段的BVID（根据时间段查询）
+        period_start = session_range['start_time']
+        period_end = session_range['end_time']
+        
+        # 查询数据库中该时间段上传的视频的BVID
+        query = select(UploadedVideo).filter(
+            UploadedVideo.upload_time.between(period_start, period_end),
+            UploadedVideo.bvid.is_not(None)
+        ).order_by(desc(UploadedVideo.upload_time)).limit(1)
+        result = await db.execute(query)
+        existing_record = result.scalars().first()
+        
+        existing_bvid = None
+        if existing_record:
+            existing_bvid = existing_record.bvid
+            logging.info(f"该直播场次已有上传记录，BVID: {existing_bvid}")
         
         # 根据是否有BVID决定上传方式
         if existing_bvid:
@@ -632,7 +630,7 @@ async def upload_to_bilibili(db: AsyncSession):
                         # 记录到数据库
                         try:
                             new_upload = UploadedVideo(
-                                bvid=bvid,
+                                bvid=None,
                                 title=f"{part_title} (分P)",
                                 first_part_filename=file_name
                             )
