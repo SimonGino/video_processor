@@ -50,6 +50,7 @@ API_ENABLED = True
 # --- 主播配置 ---
 # 默认主播名称 (用于记录直播场次和查询 BVID)
 DEFAULT_STREAMER_NAME = "银剑君"
+DOUYU_ROOM_ID = "251783"
 
 # --- 其他 ---
 # 确保处理和上传目录存在
