@@ -557,6 +557,8 @@ async def upload_to_bilibili(db: AsyncSession):
         period_start = session_range['start_time']
         period_end = session_range['end_time']
         
+        logging.info(f"查询直播场次 ID:{session_id} 的时间范围: {period_start} 到 {period_end}")
+
         # 查询数据库中该时间段上传的视频的BVID
         query = select(UploadedVideo).filter(
             UploadedVideo.upload_time.between(period_start, period_end),

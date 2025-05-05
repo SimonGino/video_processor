@@ -154,6 +154,33 @@ async def scheduled_video_pipeline():
     end_time = time.time()
     scheduler_logger.info(f"定时任务：视频处理和上传流程执行完毕。总耗时: {end_time - start_time:.2f} 秒。")
 
+async def scheduled_log_stream_end():
+    """定时任务：记录指定主播的"下播"时间（模拟）"""
+    # !! 注意: 依赖于 config.py 中的 STREAMER_NAME 设置
+    if not hasattr(config, 'DEFAULT_STREAMER_NAME') or not config.DEFAULT_STREAMER_NAME:
+        scheduler_logger.error("定时任务(log_stream_end): 未在 config.py 中配置DEFAULT_STREAMER_NAME，任务跳过。")
+        return
+
+    streamer_name = config.DEFAULT_STREAMER_NAME
+    end_time = datetime.now()
+    scheduler_logger.info(f"定时任务：准备记录主播 {streamer_name} 的模拟下播时间: {end_time}")
+
+    # 需要为定时任务创建独立的 DB Session
+    async with AsyncSessionLocal() as db:
+        try:
+            new_session = StreamSession(
+                streamer_name=streamer_name,
+                end_time=end_time
+            )
+            db.add(new_session)
+            await db.commit()
+            await db.refresh(new_session)
+            scheduler_logger.info(f"定时任务：已记录主播 {streamer_name} 的模拟下播时间: {end_time}")
+        except Exception as e:
+            scheduler_logger.error(f"定时任务(log_stream_end): 记录模拟下播信息时出错: {e}", exc_info=True)
+        finally:
+            await db.close() # 确保会话关闭
+
 # 应用启动时初始化数据库、加载配置并启动定时任务
 @app.on_event("startup")
 async def startup_event():
@@ -179,8 +206,17 @@ async def startup_event():
             replace_existing=True,
             next_run_time=datetime.now() # 应用启动后立即运行一次 (可选)
         )
+        scheduler.add_job(
+            scheduled_log_stream_end,
+            'cron',
+            hour=12, # 每天中午12点
+            minute=0,
+            id='log_stream_end_job',
+            replace_existing=True
+        )
         scheduler.start()
         logger.info(f"定时任务调度器已启动，每 {interval_minutes} 分钟执行一次 'video_pipeline_job'。")
+        logger.info(f"定时任务调度器：已添加 'log_stream_end_job'，每天中午 12:00 执行。")
     except Exception as e:
         logger.error(f"启动定时任务调度器失败: {e}", exc_info=True)
 
