@@ -157,12 +157,12 @@ async def scheduled_video_pipeline():
 
 async def scheduled_log_stream_end():
     """定时任务：检查主播状态并记录下播时间"""
-    # !! 注意: 依赖于 config.py 中的 DEFAULT_STREAMER_NAME 设置
-    if not hasattr(config, 'DEFAULT_STREAMER_NAME') or not config.DEFAULT_STREAMER_NAME:
+    # !! 注意: 依赖于 config.py 中的 STREAMER_NAME 设置
+    if not hasattr(config, 'STREAMER_NAME') or not config.STREAMER_NAME:
         scheduler_logger.error("定时任务(log_stream_end): 未在 config.py 中配置DEFAULT_STREAMER_NAME，任务跳过。")
         return
 
-    streamer_name = config.DEFAULT_STREAMER_NAME
+    streamer_name = config.STREAMER_NAME
     end_time = datetime.now()
     
     # 检查主播是否真的下播了
