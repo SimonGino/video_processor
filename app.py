@@ -267,13 +267,16 @@ async def scheduled_log_stream_end():
                 try:
                     if is_streaming:
                         # 从未直播变为直播 - 记录上播时间
+                        # 因为每隔几分钟才检查一次，所以实际开播时间可能比检测时间更早
+                        # 将记录的开播时间往前调整5分钟（与定时任务执行频率一致）
+                        adjusted_start_time = current_time - timedelta(minutes=5)
                         new_session = StreamSession(
                             streamer_name=streamer_name,
-                            start_time=current_time,
+                            start_time=adjusted_start_time,
                             end_time=None  # 临时填充一个未来值，避免非空约束
                         )
                         db.add(new_session)
-                        scheduler_logger.info(f"已记录主播 {streamer_name} 的上播时间: {current_time}")
+                        scheduler_logger.info(f"已记录主播 {streamer_name} 的上播时间: {adjusted_start_time} (已自动调整-5分钟)")
                     else:
                         # 从直播变为未直播 - 记录下播时间
                         # 查找最近一条有start_time但没有end_time的记录
@@ -392,7 +395,7 @@ async def startup_event():
              scheduler.add_job(
                  scheduled_log_stream_end,
                  'interval',
-                 minutes=3,   # 每3分钟执行一次，足够检测状态变化，但不会太频繁
+                 minutes=5,   # 每5分钟执行一次，足够检测状态变化，但不会太频繁
                  id='log_stream_end_job',
                  replace_existing=True
              )
