@@ -13,9 +13,10 @@ class StreamSession(Base):
     __tablename__ = 'stream_sessions'
 
     id = Column(Integer, primary_key=True, index=True)
-    streamer_name = Column(String, index=True, nullable=False)
-    end_time = Column(DateTime, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    streamer_name = Column(String, nullable=False, index=True)
+    start_time = Column(DateTime, nullable=True)  # 新增上播时间字段，允许为空以兼容旧数据
+    end_time = Column(DateTime, nullable=True)    # 下播时间，修改为可为空
+    created_at = Column(DateTime, default=func.now())
 
     def __repr__(self):
         return f"<StreamSession(streamer='{self.streamer_name}', end_time='{self.end_time}')>"
@@ -24,10 +25,10 @@ class UploadedVideo(Base):
     __tablename__ = 'uploaded_videos'
 
     id = Column(Integer, primary_key=True, index=True)
-    bvid = Column(String, unique=True, index=True, nullable=True)  # 允许为空
+    bvid = Column(String, nullable=True, unique=True)
     title = Column(String, nullable=False)
-    first_part_filename = Column(String, nullable=False)
-    upload_time = Column(DateTime(timezone=True), server_default=func.now())
+    first_part_filename = Column(String, nullable=False, unique=True)
+    upload_time = Column(DateTime, default=func.now())
 
     def __repr__(self):
         return f"<UploadedVideo(bvid='{self.bvid}', title='{self.title}')>" 

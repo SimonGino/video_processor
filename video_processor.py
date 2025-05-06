@@ -478,42 +478,35 @@ async def upload_to_bilibili(db: AsyncSession):
     # 4. 获取所有直播场次信息（近三天）
     try:
         streamer_name = config.DEFAULT_STREAMER_NAME
+        # 获取近三天内有完整上下播记录的场次
         sessions_query = select(StreamSession).filter(
             StreamSession.streamer_name == streamer_name,
+            StreamSession.start_time.is_not(None),  # 必须有上播时间
+            StreamSession.end_time.is_not(None),    # 必须有下播时间
             StreamSession.end_time > datetime.now() - timedelta(days=3)
-        ).order_by(StreamSession.end_time)
+        ).order_by(StreamSession.start_time)
         
         sessions_result = await db.execute(sessions_query)
         all_sessions = sessions_result.scalars().all()
         
         if not all_sessions:
-            logging.warning(f"主播 {streamer_name} 没有下播记录，无法划分直播场次")
+            logging.warning(f"主播 {streamer_name} 没有完整的直播场次记录，无法划分直播场次")
             return
             
-        logging.info(f"获取到 {len(all_sessions)} 条直播场次记录")
+        logging.info(f"获取到 {len(all_sessions)} 条完整直播场次记录")
     except Exception as e:
         logging.error(f"获取直播场次信息时出错: {e}")
         return
     
     # 5. 根据直播场次将视频分组
-    # 创建时间段映射: 每个场次的结束时间到下一个场次的结束时间
+    # 为每个场次创建时间范围
     session_ranges = []
-    for i in range(len(all_sessions) - 1):
-        current_session = all_sessions[i]
-        next_session = all_sessions[i + 1]
+    for session in all_sessions:
+        # 每个场次从上播时间到下播时间
         session_ranges.append({
-            'start_time': current_session.end_time,
-            'end_time': next_session.end_time,
-            'session_id': next_session.id
-        })
-    
-    # 添加最后一个场次到当前时间
-    if all_sessions:
-        last_session = all_sessions[-1]
-        session_ranges.append({
-            'start_time': last_session.end_time,
-            'end_time': datetime.now(),
-            'session_id': last_session.id
+            'start_time': session.start_time,
+            'end_time': session.end_time,
+            'session_id': session.id
         })
     
     # 将视频分配到对应的时间段
@@ -523,7 +516,8 @@ async def upload_to_bilibili(db: AsyncSession):
         assigned = False
         
         for session_range in session_ranges:
-            if session_range['start_time'] < video_time <= session_range['end_time']:
+            # 判断视频时间是否在某个直播场次内
+            if session_range['start_time'] <= video_time <= session_range['end_time']:
                 session_id = session_range['session_id']
                 if session_id not in session_videos:
                     session_videos[session_id] = []

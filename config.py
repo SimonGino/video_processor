@@ -5,7 +5,7 @@ import os
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # 使用绝对路径指定处理文件夹
-PROCESSING_FOLDER = "/vol2/1000/biliup/backup"
+PROCESSING_FOLDER = "/vol2/1000/biliup"
 # 使用绝对路径指定上传文件夹
 UPLOAD_FOLDER = "/vol2/1000/biliup/backup"
 # Bilibili 配置文件路径
@@ -16,14 +16,14 @@ COOKIES_PATH = "cookies.json"
 
 # --- 文件清理配置 ---
 # 删除小于此大小的 FLV 文件 (MB)
-MIN_FILE_SIZE_MB = 100
+MIN_FILE_SIZE_MB = 10
 
 
 # --- 弹幕转换配置 ---
 # ASS 弹幕字体大小
-FONT_SIZE = 50
+FONT_SIZE = 40
 # ASS 弹幕描边/阴影字体大小 (通常比 FONT_SIZE 小一点)
-SC_FONT_SIZE = 48
+SC_FONT_SIZE = 38
 
 
 # --- FFmpeg/FFprobe 配置 ---
@@ -39,7 +39,7 @@ SCHEDULE_INTERVAL_MINUTES = 60
 
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
-DELETE_UPLOADED_FILES = False
+DELETE_UPLOADED_FILES = True
 
 # --- API 配置 ---
 # API 服务器基础 URL
