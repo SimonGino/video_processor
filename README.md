@@ -162,7 +162,7 @@ sequenceDiagram
         ```
     *   安装依赖：
         ```bash
-        pip install -r requirements.txt
+        uv sync
         ```
 
 4.  **安装 FFmpeg 和 FFprobe:**
@@ -261,6 +261,11 @@ sequenceDiagram
     python app.py
     ```
     这将启动 FastAPI 服务器，并且 APScheduler 将根据 `config.py` 中 `SCHEDULE_INTERVAL_MINUTES` 和其他定时器配置开始执行任务。
+
+    ```bash
+    nohup python app.py > app.log 2>&1 &
+    ```
+    使用nohup运行，可以避免终端关闭导致进程被杀掉。
 
 3.  **访问 API (可选):**
     *   API 服务器默认运行在 `http://0.0.0.0:50009` (或由 `config.py` 中的 `API_BASE_URL` 配置的地址)。
