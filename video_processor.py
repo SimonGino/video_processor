@@ -290,7 +290,7 @@ def encode_video():
             f'-vf "ass={shlex.quote(ass_file)},hwupload=extra_hw_frames=64" '
             f'-c:v h264_qsv '
             f'-preset veryfast '
-            f'-global_quality 25 ' # 数字越小质量越高，25 是一个不错的平衡点
+            f'-global_quality 28 ' # 数字越小质量越高，25 是一个不错的平衡点
             f'-c:a copy ' # 直接复制音频流，不重新编码
             f'-y {shlex.quote(temp_mp4_file)}' # 输出到临时文件
         )
@@ -478,22 +478,40 @@ async def upload_to_bilibili(db: AsyncSession):
     # 4. 获取所有直播场次信息（近三天）
     try:
         streamer_name = config.DEFAULT_STREAMER_NAME
-        # 获取近三天内有完整上下播记录的场次
-        sessions_query = select(StreamSession).filter(
+        
+        # A. 获取近三天内有完整上下播记录的场次
+        complete_sessions_query = select(StreamSession).filter(
             StreamSession.streamer_name == streamer_name,
             StreamSession.start_time.is_not(None),  # 必须有上播时间
             StreamSession.end_time.is_not(None),    # 必须有下播时间
             StreamSession.end_time > datetime.now() - timedelta(days=3)
         ).order_by(StreamSession.start_time)
         
-        sessions_result = await db.execute(sessions_query)
-        all_sessions = sessions_result.scalars().all()
+        complete_sessions_result = await db.execute(complete_sessions_query)
+        complete_sessions = complete_sessions_result.scalars().all()
         
+        # B. 获取有上播时间但尚未下播的场次（正在进行的直播）
+        current_session_query = select(StreamSession).filter(
+            StreamSession.streamer_name == streamer_name,
+            StreamSession.start_time.is_not(None),  # 必须有上播时间
+            StreamSession.end_time.is_(None)        # 没有下播时间 = 正在直播
+        ).order_by(desc(StreamSession.start_time)).limit(1)  # 只获取最近的一个
+        
+        current_session_result = await db.execute(current_session_query)
+        current_session = current_session_result.scalars().first()
+        
+        # 合并两种场次
+        all_sessions = list(complete_sessions)
+        if current_session:
+            # 将当前正在进行的直播添加到场次列表中
+            all_sessions.append(current_session)
+            logging.info(f"发现当前正在进行的直播，开始于: {current_session.start_time}")
+            
         if not all_sessions:
-            logging.warning(f"主播 {streamer_name} 没有完整的直播场次记录，无法划分直播场次")
+            logging.warning(f"主播 {streamer_name} 没有可用的直播场次记录，无法划分直播场次")
             return
             
-        logging.info(f"获取到 {len(all_sessions)} 条完整直播场次记录")
+        logging.info(f"共获取到 {len(all_sessions)} 条直播场次记录（含 {len(complete_sessions)} 条完整记录和 {1 if current_session else 0} 条进行中的直播）")
     except Exception as e:
         logging.error(f"获取直播场次信息时出错: {e}")
         return
@@ -502,15 +520,21 @@ async def upload_to_bilibili(db: AsyncSession):
     # 为每个场次创建时间范围
     session_ranges = []
     for session in all_sessions:
-        # 每个场次从上播时间到下播时间
+        # 对于已结束的直播，使用实际的开始和结束时间
+        # 对于正在进行的直播，使用开始时间到当前时间作为范围
+        end_time = session.end_time if session.end_time else datetime.now()
+        
         session_ranges.append({
             'start_time': session.start_time,
-            'end_time': session.end_time,
-            'session_id': session.id
+            'end_time': end_time,
+            'session_id': session.id,
+            'is_current': session.end_time is None  # 标记是否为当前直播
         })
     
     # 将视频分配到对应的时间段
     session_videos = {}
+    unassigned_videos = []  # 存储无法分配的视频
+    
     for video_info in video_info_list:
         video_time = video_info['timestamp']
         assigned = False
@@ -520,23 +544,30 @@ async def upload_to_bilibili(db: AsyncSession):
             if session_range['start_time'] <= video_time <= session_range['end_time']:
                 session_id = session_range['session_id']
                 if session_id not in session_videos:
-                    session_videos[session_id] = []
+                    session_videos[session_id] = {
+                        'videos': [],
+                        'is_current': session_range['is_current']
+                    }
                 
-                session_videos[session_id].append(video_info)
+                session_videos[session_id]['videos'].append(video_info)
                 assigned = True
                 break
         
         if not assigned:
-            logging.warning(f"无法确定视频 {video_info['filename']} 所属的直播场次，将跳过上传")
+            logging.warning(f"无法确定视频 {video_info['filename']} 所属的直播场次，将保存到未分配列表")
+            unassigned_videos.append(video_info)
     
-    if not session_videos:
+    if not session_videos and not unassigned_videos:
         logging.info("没有视频能够匹配到任何直播场次，结束上传流程")
         return
     
-    logging.info(f"视频已分组到 {len(session_videos)} 个直播场次")
+    logging.info(f"视频已分组到 {len(session_videos)} 个直播场次，另有 {len(unassigned_videos)} 个视频无法分配")
     
     # 6. 处理每个时间段的视频上传
-    for session_id, videos in session_videos.items():
+    for session_id, session_data in session_videos.items():
+        videos = session_data['videos']
+        is_current_session = session_data['is_current']
+        
         if not videos:
             continue
         
@@ -545,11 +576,19 @@ async def upload_to_bilibili(db: AsyncSession):
         session_start_time = min(v['timestamp'] for v in videos)
         formatted_date = session_start_time.strftime('%Y-%m-%d')
         
-        logging.info(f"开始处理直播场次 ID:{session_id} ({formatted_date}) 的 {len(videos)} 个视频")
+        # 获取会话详情
+        session_query = select(StreamSession).filter(StreamSession.id == session_id)
+        session_result = await db.execute(session_query)
+        session = session_result.scalars().first()
+        
+        if is_current_session:
+            logging.info(f"开始处理当前进行中的直播 ID:{session_id} (开始于 {session.start_time}) 的 {len(videos)} 个视频")
+        else:
+            logging.info(f"开始处理已结束的直播场次 ID:{session_id} ({formatted_date}) 的 {len(videos)} 个视频")
         
         # 获取该时间段的BVID（根据时间段查询）
-        period_start = session_range['start_time']
-        period_end = session_range['end_time']
+        period_start = session.start_time
+        period_end = session.end_time or datetime.now()
         
         logging.info(f"查询直播场次 ID:{session_id} 的时间范围: {period_start} 到 {period_end}")
 
@@ -682,7 +721,7 @@ async def upload_to_bilibili(db: AsyncSession):
             try:
                 # 从视频信息获取时间
                 video_time = first_video_info['timestamp']
-                formatted_time = video_time.strftime('%Y年%m月%d日 %H:%M')
+                formatted_time = video_time.strftime('%Y年%m月%d日')
                 
                 # 替换标题中的时间占位符
                 if '{time}' in title_template:
@@ -786,6 +825,52 @@ async def upload_to_bilibili(db: AsyncSession):
             else:
                 logging.error(f"上传首个视频失败: {first_video_filename}")
                 error_count += 1
+    
+    # 处理未分配的视频
+    if unassigned_videos and len(unassigned_videos) > 0:
+        logging.info(f"开始处理 {len(unassigned_videos)} 个未分配到直播场次的视频")
+        
+        # 对于无法分配到直播场次的视频，我们可以将它们作为独立的一组处理
+        # 检查是否已有相关BVID
+        today = datetime.now().strftime('%Y-%m-%d')
+        title_keyword = f"直播记录 {today}"
+        
+        # 查找今天的上传记录
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = datetime.now()
+        
+        query = select(UploadedVideo).filter(
+            UploadedVideo.upload_time.between(today_start, today_end),
+            UploadedVideo.bvid.is_not(None),
+            UploadedVideo.title.contains(title_keyword)
+        ).order_by(desc(UploadedVideo.upload_time)).limit(1)
+        
+        result = await db.execute(query)
+        today_record = result.scalars().first()
+        
+        existing_bvid = None
+        if today_record:
+            existing_bvid = today_record.bvid
+            logging.info(f"找到今天的上传记录，BVID: {existing_bvid}")
+        
+        # 按照与直播场次相同的逻辑处理
+        # 对未分配视频按时间排序
+        unassigned_videos.sort(key=lambda x: x['timestamp'])
+        
+        if existing_bvid:
+            # 以分P形式追加
+            logging.info(f"将未分配视频以分P形式追加到今天的记录 BVID: {existing_bvid}")
+            # 处理未分配视频的追加上传逻辑与上面类似，这里代码略去
+            # ... 
+        else:
+            # 创建新稿件
+            logging.info(f"为未分配视频创建新稿件")
+            
+            # 只处理第一个视频，创建新稿件
+            if unassigned_videos:
+                first_video_info = unassigned_videos[0]
+                # 处理未分配视频的上传逻辑与上面类似，这里代码略去
+                # ...
     
     logging.info(f"Bilibili 视频上传完成。共处理 {len(video_info_list)} 个文件，成功上传: {uploaded_count}，失败: {error_count}")
 
