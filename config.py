@@ -41,6 +41,10 @@ SCHEDULE_INTERVAL_MINUTES = 60
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
 DELETE_UPLOADED_FILES = True
 
+# --- 处理时机控制 ---
+# 是否仅在主播下播后处理视频 (True: 仅下播后处理, False: 按定时任务处理)
+PROCESS_AFTER_STREAM_END = True
+
 # --- API 配置 ---
 # API 服务器基础 URL
 API_BASE_URL = "http://localhost:50009"

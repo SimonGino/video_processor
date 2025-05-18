@@ -133,6 +133,30 @@ async def scheduled_video_pipeline():
     loop = asyncio.get_running_loop()
     start_time = time.time()
 
+    # 检查是否启用了"仅下播后处理"功能
+    if hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
+        # 检查主播是否正在直播
+        try:
+            scheduler_logger.info("定时任务：检查主播是否在直播中...")
+            async with AsyncSessionLocal() as session:
+                query = select(StreamSession).filter(
+                    StreamSession.streamer_name == config.STREAMER_NAME,
+                    StreamSession.start_time.is_not(None),
+                    StreamSession.end_time.is_(None)  # 没有end_time表示正在直播
+                ).order_by(desc(StreamSession.start_time)).limit(1)
+                
+                result = await session.execute(query)
+                current_stream = result.scalars().first()
+                
+                if current_stream:
+                    scheduler_logger.info(f"定时任务：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，跳过压制和上传任务")
+                    return  # 主播正在直播，跳过后续处理
+                else:
+                    scheduler_logger.info(f"定时任务：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制和上传任务")
+        except Exception as e:
+            scheduler_logger.error(f"定时任务：检查主播直播状态时出错: {e}", exc_info=True)
+            # 出错时仍然继续处理，不因为检查出错而影响正常功能
+
     # --- 1. 同步处理任务 (在线程池中运行避免阻塞) ---
     try:
         scheduler_logger.info("定时任务：执行文件清理...")
@@ -310,6 +334,14 @@ async def scheduled_log_stream_end():
                     # 更新状态缓存
                     scheduled_log_stream_end.last_stream_status = is_streaming
                     
+                    # 如果检测到下播且启用了"仅下播后处理"，则立即触发处理任务
+                    if not is_streaming and hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
+                        scheduler_logger.info("检测到主播下播，且已启用'仅下播后处理'选项，立即触发视频处理和上传流程...")
+                        # 等待几分钟后再执行，确保直播结束后录制软件有足够时间保存文件
+                        await asyncio.sleep(180)  # 等待3分钟
+                        # 使用单独的会话以避免会话超时
+                        asyncio.create_task(scheduled_video_pipeline())  # 异步创建任务，不等待完成
+                        
                 except Exception as e:
                     scheduler_logger.error(f"定时任务(log_stream_end): 记录直播状态时出错: {e}", exc_info=True)
                     await db.rollback()
@@ -702,8 +734,31 @@ def run_processing_sync():
         logger.error(f"后台任务：视频处理执行过程中出错: {e}")
 
 @app.post("/run_processing_tasks", response_model=TaskResponse)
-async def trigger_processing_tasks(background_tasks: BackgroundTasks):
+async def trigger_processing_tasks(background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """触发后台执行清理、转换、压制任务"""
+    
+    # 检查是否启用了"仅下播后处理"功能且是手动触发
+    if hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
+        # 检查主播是否正在直播
+        try:
+            query = select(StreamSession).filter(
+                StreamSession.streamer_name == config.STREAMER_NAME,
+                StreamSession.start_time.is_not(None),
+                StreamSession.end_time.is_(None)  # 没有end_time表示正在直播
+            ).order_by(desc(StreamSession.start_time)).limit(1)
+            
+            result = await db.execute(query)
+            current_stream = result.scalars().first()
+            
+            if current_stream:
+                logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行压制任务")
+                return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行压制任务"}
+            else:
+                logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制任务")
+        except Exception as e:
+            logger.error(f"手动触发：检查主播直播状态时出错: {e}", exc_info=True)
+            # 出错时仍然继续处理，不因为检查出错而影响正常功能
+    
     background_tasks.add_task(run_processing_sync)
     logger.info("已将视频处理任务添加到后台执行队列 (手动触发)")
     return {"message": "视频处理任务已开始在后台执行 (手动触发)"}
@@ -728,6 +783,29 @@ async def trigger_upload_tasks(
     db: AsyncSession = Depends(get_db) # 手动触发时从依赖注入获取 db
 ):
     """触发后台执行BVID更新和上传任务"""
+    
+    # 检查是否启用了"仅下播后处理"功能且是手动触发
+    if hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
+        # 检查主播是否正在直播
+        try:
+            query = select(StreamSession).filter(
+                StreamSession.streamer_name == config.STREAMER_NAME,
+                StreamSession.start_time.is_not(None),
+                StreamSession.end_time.is_(None)  # 没有end_time表示正在直播
+            ).order_by(desc(StreamSession.start_time)).limit(1)
+            
+            result = await db.execute(query)
+            current_stream = result.scalars().first()
+            
+            if current_stream:
+                logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行上传任务")
+                return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行上传任务"}
+            else:
+                logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行上传任务")
+        except Exception as e:
+            logger.error(f"手动触发：检查主播直播状态时出错: {e}", exc_info=True)
+            # 出错时仍然继续处理，不因为检查出错而影响正常功能
+    
     # 注意：这里传递的 db 是通过 Depends(get_db) 获取的 request-scoped session
     # run_upload_async 需要能处理这种 session (它目前应该可以)
     background_tasks.add_task(run_upload_async, db) 
