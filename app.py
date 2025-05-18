@@ -28,7 +28,8 @@ from video_processor import (
     convert_danmaku, 
     encode_video, 
     update_video_bvids, 
-    upload_to_bilibili
+    upload_to_bilibili,
+    get_timestamp_from_filename  # 导入从文件名解析时间戳的函数
 )
 # 导入模型
 from models import Base, StreamSession, UploadedVideo
@@ -87,7 +88,8 @@ class UploadedVideoResponse(BaseModel):
     bvid: Optional[str] = None
     title: str
     first_part_filename: str
-    upload_time: datetime
+    upload_time: Optional[datetime] = None
+    created_at: datetime
 
     class Config:
         orm_mode = True
@@ -513,11 +515,15 @@ async def record_upload(
             
             logger.warning(f"尝试记录已存在的文件: {first_part_filename}")
             raise HTTPException(status_code=400, detail=f"文件 {first_part_filename} 已存在记录")
-            
+        
+        # 从文件名解析上传时间    
+        upload_time = get_timestamp_from_filename(first_part_filename)
+        
         new_upload = UploadedVideo(
             bvid=bvid,
             title=title,
-            first_part_filename=first_part_filename
+            first_part_filename=first_part_filename,
+            upload_time=upload_time
         )
         
         db.add(new_upload)
@@ -525,9 +531,9 @@ async def record_upload(
         await db.refresh(new_upload)
         
         if bvid:
-            logger.info(f"已记录视频上传: {title} (BVID: {bvid})")
+            logger.info(f"已记录视频上传: {title} (BVID: {bvid}, 视频时间: {upload_time})")
         else:
-            logger.info(f"已记录视频上传: {title} (暂无BVID)")
+            logger.info(f"已记录视频上传: {title} (暂无BVID, 视频时间: {upload_time})")
         return new_upload
     except HTTPException:
         raise
@@ -574,7 +580,7 @@ async def get_latest_bvid(
             logger.warning(f"主播 {streamer_name} 的下播记录不足，无法确定最近的完整直播场次")
             return {"found": False, "reason": "insufficient_sessions"}
         
-        upload_query = select(UploadedVideo).order_by(desc(UploadedVideo.upload_time)).limit(1)
+        upload_query = select(UploadedVideo).order_by(desc(UploadedVideo.created_at)).limit(1)
         upload_result = await db.execute(upload_query)
         latest_upload = upload_result.scalars().first()
         

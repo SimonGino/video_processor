@@ -33,7 +33,8 @@ class UploadedVideo(Base):
     bvid = Column(String, nullable=True, unique=True)
     title = Column(String, nullable=False)
     first_part_filename = Column(String, nullable=False, unique=True)
-    upload_time = Column(DateTime, default=local_now)  # 使用本地时区函数
+    upload_time = Column(DateTime, nullable=True)  # 从文件名解析的视频录制时间
+    created_at = Column(DateTime, default=local_now)  # 数据库记录创建时间
 
     def __repr__(self):
         return f"<UploadedVideo(bvid='{self.bvid}', title='{self.title}')>" 

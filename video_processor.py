@@ -29,6 +29,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- 全局变量 --- 
 yaml_config = {} # 用于存储从 config.yaml 读取的配置
 
+# 从文件名解析时间戳的函数
+def get_timestamp_from_filename(filepath):
+    """从文件名解析时间戳，适配 '银剑君录播YYYY-MM-DDTHH_mm_ss.mp4' 格式"""
+    filename = os.path.basename(filepath)
+    try:
+        # 适配 '银剑君录播YYYY-MM-DDTHH_mm_ss.mp4' 格式
+        timestamp_str = filename.split('录播')[-1].split('.')[0].replace('T', ' ')
+        return datetime.strptime(timestamp_str, '%Y-%m-%d %H_%M_%S')
+    except (IndexError, ValueError) as e:
+        logging.warning(f"无法从文件名 {filename} 解析时间戳: {e}，将使用当前时间。")
+        return datetime.now()
+
 def load_yaml_config():
     """加载 config.yaml 文件，并验证必要键"""
     global yaml_config
@@ -424,17 +436,6 @@ async def upload_to_bilibili(db: AsyncSession):
     
     logging.info(f"上传目录中共找到 {len(mp4_files)} 个 MP4 文件")
     
-    # 按文件名中的时间戳排序
-    def get_timestamp_from_filename(filepath):
-        filename = os.path.basename(filepath)
-        try:
-            # 适配 '银剑君录播YYYY-MM-DDTHH_mm_ss.mp4' 格式
-            timestamp_str = filename.split('录播')[-1].split('.')[0].replace('T', ' ')
-            return datetime.strptime(timestamp_str, '%Y-%m-%d %H_%M_%S')
-        except (IndexError, ValueError) as e:
-            logging.warning(f"无法从文件名 {filename} 解析时间戳: {e}，将影响排序。")
-            return datetime.min
-    
     try:
         # 对所有MP4文件按时间戳排序
         mp4_files.sort(key=get_timestamp_from_filename)
@@ -667,7 +668,8 @@ async def upload_to_bilibili(db: AsyncSession):
                             new_upload = UploadedVideo(
                                 bvid=None,
                                 title=f"{part_title} (分P)",
-                                first_part_filename=file_name
+                                first_part_filename=file_name,
+                                upload_time=video_info['timestamp']  # 设置录制时间
                             )
                             db.add(new_upload)
                             await db.commit()
@@ -757,7 +759,8 @@ async def upload_to_bilibili(db: AsyncSession):
                     new_upload = UploadedVideo(
                         bvid=None,  # 先设为None
                         title=title,
-                        first_part_filename=first_video_filename
+                        first_part_filename=first_video_filename,
+                        upload_time=first_video_info['timestamp']  # 设置录制时间
                     )
                     db.add(new_upload)
                     await db.commit()
