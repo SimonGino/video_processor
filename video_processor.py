@@ -397,7 +397,7 @@ def encode_video():
             f'-vf "ass={shlex.quote(ass_file)},hwupload=extra_hw_frames=64" '
             f'-c:v h264_qsv '
             f'-preset veryfast '
-            f'-global_quality 28 ' # 数字越小质量越高，25 是一个不错的平衡点
+            f'-global_quality 32 ' # 数字越小质量越高，25 是一个不错的平衡点
             f'-c:a copy ' # 直接复制音频流，不重新编码
             f'-y {shlex.quote(temp_mp4_file)}' # 输出到临时文件
         )
