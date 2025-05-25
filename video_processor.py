@@ -243,6 +243,101 @@ def convert_danmaku():
 
 def encode_video():
     """压制带有 ASS 弹幕的 FLV 视频为 MP4"""
+    logging.info("开始处理视频文件...")
+    
+    # 检查是否需要跳过视频压制步骤
+    if hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING:
+        logging.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过压制步骤直接处理 FLV 文件")
+        moved_count = 0
+        skipped_count = 0
+        error_count = 0
+        
+        # 查找所有 FLV 文件
+        flv_pattern = os.path.join(config.PROCESSING_FOLDER, "*.flv")
+        logging.info(f"正在搜索 FLV 文件，使用模式: {flv_pattern}")
+        flv_files = glob.glob(flv_pattern)
+        
+        if not flv_files:
+            logging.warning(f"在处理目录 {config.PROCESSING_FOLDER} 中未找到任何 FLV 文件")
+            # 尝试列出目录内容，检查是否有权限问题
+            try:
+                dir_content = os.listdir(config.PROCESSING_FOLDER)
+                logging.info(f"目录内容: {dir_content[:10]}{'...' if len(dir_content) > 10 else ''}")
+            except Exception as e:
+                logging.error(f"无法列出目录内容: {e}")
+        else:
+            logging.info(f"找到 {len(flv_files)} 个 FLV 文件: {[os.path.basename(f) for f in flv_files]}")
+        
+        for flv_file in flv_files:
+            try:
+                base_name = os.path.splitext(flv_file)[0]
+                # 目标路径保持 .flv 扩展名
+                upload_flv_file = os.path.join(config.UPLOAD_FOLDER, os.path.basename(flv_file))
+                
+                logging.info(f"处理文件: {os.path.basename(flv_file)}")
+                
+                # 检查 FLV 文件是否正在录制中
+                flv_part_file = flv_file + ".part"
+                if os.path.exists(flv_part_file):
+                    logging.info(f"跳过处理，因为找到正在录制的文件: {os.path.basename(flv_part_file)}")
+                    skipped_count += 1
+                    continue
+                
+                # 检查文件大小
+                try:
+                    file_size = os.path.getsize(flv_file)
+                    logging.info(f"文件大小: {file_size / (1024*1024):.2f} MB")
+                except Exception as e:
+                    logging.error(f"获取文件大小失败: {e}")
+                    
+                # 检查上传目录中是否已存在该 FLV 文件
+                if os.path.exists(upload_flv_file):
+                    logging.info(f"FLV 文件已存在于上传目录，跳过处理: {os.path.basename(upload_flv_file)}")
+                    skipped_count += 1
+                    continue
+                    
+                # 检查上传目录是否存在并可写
+                if not os.path.exists(config.UPLOAD_FOLDER):
+                    try:
+                        os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
+                        logging.info(f"创建上传目录: {config.UPLOAD_FOLDER}")
+                    except Exception as e:
+                        logging.error(f"创建上传目录失败: {e}")
+                        error_count += 1
+                        continue
+                        
+                # 检查文件权限
+                try:
+                    if not os.access(flv_file, os.R_OK):
+                        logging.error(f"没有权限读取文件: {flv_file}")
+                        error_count += 1
+                        continue
+                    
+                    if not os.access(config.UPLOAD_FOLDER, os.W_OK):
+                        logging.error(f"没有权限写入上传目录: {config.UPLOAD_FOLDER}")
+                        error_count += 1
+                        continue
+                except Exception as e:
+                    logging.error(f"检查文件权限时出错: {e}")
+                
+                # 直接移动 FLV 文件到上传目录
+                try:
+                    logging.info(f"准备移动文件: {os.path.basename(flv_file)} -> {config.UPLOAD_FOLDER}")
+                    shutil.move(flv_file, upload_flv_file)  # 使用 move 直接移动文件
+                    logging.info(f"成功移动文件到: {upload_flv_file}")
+                    
+                    moved_count += 1
+                except Exception as e:
+                    logging.error(f"移动文件 {os.path.basename(flv_file)} 到上传目录失败: {e}")
+                    error_count += 1
+            except Exception as e:
+                logging.error(f"处理文件 {os.path.basename(flv_file) if 'flv_file' in locals() else '未知'} 时发生未知错误: {e}")
+                error_count += 1
+        
+        logging.info(f"直接处理 FLV 文件完成。成功: {moved_count}, 跳过: {skipped_count}, 失败: {error_count}")
+        return
+    
+    # 以下是原有的视频压制逻辑
     logging.info("开始压制视频...")
     encoded_count = 0
     skipped_count = 0
@@ -406,7 +501,18 @@ async def upload_to_bilibili(db: AsyncSession):
         logging.error("Bilibili 上传配置 (config.yaml) 未成功加载，跳过上传步骤。")
         return
 
-    logging.info("开始检查并上传视频到 Bilibili...")
+    # 检查是否跳过视频压制
+    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    if is_skip_encoding:
+        logging.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将寻找并上传 FLV 文件")
+        video_extension = "flv"
+        title_suffix = config.NO_DANMAKU_TITLE_SUFFIX if hasattr(config, 'NO_DANMAKU_TITLE_SUFFIX') else "【无弹幕版】"
+    else:
+        logging.info("将寻找并上传压制后的 MP4 文件")
+        video_extension = "mp4"
+        title_suffix = ""  # 压制后的视频不需要特殊后缀
+
+    logging.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
     uploaded_count = 0
     error_count = 0
     
@@ -429,16 +535,16 @@ async def upload_to_bilibili(db: AsyncSession):
     feed_controller = FeedController()
     
     # 2. 获取所有待上传的视频文件并按时间戳排序
-    mp4_files = glob.glob(os.path.join(config.UPLOAD_FOLDER, "*.mp4"))
-    if not mp4_files:
-        logging.info("在上传目录中没有找到 MP4 文件，无需上传。")
+    video_files = glob.glob(os.path.join(config.UPLOAD_FOLDER, f"*.{video_extension}"))
+    if not video_files:
+        logging.info(f"在上传目录中没有找到 {video_extension.upper()} 文件，无需上传。")
         return
     
-    logging.info(f"上传目录中共找到 {len(mp4_files)} 个 MP4 文件")
+    logging.info(f"上传目录中共找到 {len(video_files)} 个 {video_extension.upper()} 文件")
     
     try:
-        # 对所有MP4文件按时间戳排序
-        mp4_files.sort(key=get_timestamp_from_filename)
+        # 对所有视频文件按时间戳排序
+        video_files.sort(key=get_timestamp_from_filename)
     except Exception as e:
         logging.error(f"根据时间戳排序文件时出错: {e}，将按默认顺序处理。")
     
@@ -446,7 +552,7 @@ async def upload_to_bilibili(db: AsyncSession):
     video_info_list = []
     already_uploaded_files = []
     
-    for file_path in mp4_files:
+    for file_path in video_files:
         file_name = os.path.basename(file_path)
         timestamp = get_timestamp_from_filename(file_path)
         
@@ -646,9 +752,18 @@ async def upload_to_bilibili(db: AsyncSession):
                     try:
                         video_time = video_info['timestamp']
                         part_time_str = video_time.strftime('%H:%M:%S')
-                        part_title = f"P{part_number} {part_time_str}"
+                        
+                        # 根据是否跳过压制添加不同的标题后缀
+                        if is_skip_encoding:
+                            part_title = f"P{part_number} {part_time_str} {title_suffix}"
+                        else:
+                            part_title = f"P{part_number} {part_time_str}"
                     except Exception:
-                        part_title = f"P{part_number}"
+                        # 如果时间戳解析失败，仍然添加后缀
+                        if is_skip_encoding:
+                            part_title = f"P{part_number} {title_suffix}"
+                        else:
+                            part_title = f"P{part_number}"
                     
                     logging.info(f"准备追加分P ({part_title}): {file_name}")
                     
@@ -730,8 +845,16 @@ async def upload_to_bilibili(db: AsyncSession):
                     title = title_template.replace('{time}', formatted_time)
                 elif len(videos) > 1:  # 有多个文件，使用合集标题
                     title = f"{title_template} (合集 {video_time.strftime('%Y-%m-%d')})"
+                
+                # 如果跳过压制，添加无弹幕标题后缀
+                if is_skip_encoding:
+                    title = f"{title} {title_suffix}"
+                
             except Exception as e:
                 logging.warning(f"生成标题时出错: {e}，使用默认标题: {title}")
+                # 即使出错也添加无弹幕标题后缀
+                if is_skip_encoding:
+                    title = f"{title} {title_suffix}"
             
             logging.info(f"上传首个视频，创建稿件。标题: {title}")
             
@@ -836,7 +959,11 @@ async def upload_to_bilibili(db: AsyncSession):
         # 对于无法分配到直播场次的视频，我们可以将它们作为独立的一组处理
         # 检查是否已有相关BVID
         today = datetime.now().strftime('%Y-%m-%d')
+        
+        # 为标题添加无弹幕后缀（如果需要）
         title_keyword = f"直播记录 {today}"
+        if is_skip_encoding:
+            title_keyword = f"{title_keyword} {title_suffix}"
         
         # 查找今天的上传记录
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -875,7 +1002,9 @@ async def upload_to_bilibili(db: AsyncSession):
                 # 处理未分配视频的上传逻辑与上面类似，这里代码略去
                 # ...
     
-    logging.info(f"Bilibili 视频上传完成。共处理 {len(video_info_list)} 个文件，成功上传: {uploaded_count}，失败: {error_count}")
+    # 根据上传的文件类型更新日志信息
+    file_type = "FLV" if is_skip_encoding else "MP4"
+    logging.info(f"Bilibili {file_type} 视频上传完成。共处理 {len(video_info_list)} 个文件，成功上传: {uploaded_count}，失败: {error_count}")
 
 
 async def update_video_bvids(db: AsyncSession):

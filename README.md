@@ -19,8 +19,9 @@
 *   **🎬 视频压制与弹幕内嵌:**
     *   将 `.flv` 录像文件与 `.ass` 弹幕文件硬编码压制为 `.mp4` 格式。
     *   **硬件加速:** 支持 Intel QSV (Quick Sync Video) 进行快速编码 (`h264_qsv`)。
+    *   **可选跳过压制:** 支持跳过压制步骤，直接上传原始 `.flv` 录制文件，节省处理时间和系统资源。
 *   **🚀 自动化哔哩哔哩上传:**
-    *   自动上传处理完成的 `.mp4` 视频至哔哩哔哩。
+    *   自动上传处理完成的视频文件（`.mp4` 或 `.flv`）至哔哩哔哩。
     *   **智能多P稿件处理:**
         *   根据数据库中记录的直播场次信息，将属于同一场直播的视频分组。
         *   自动将一场直播中的第一个视频作为新稿件上传。
@@ -28,6 +29,7 @@
         *   该场直播后续的视频将作为分P (P2, P3...) 追加到已获取的 BVID 下。
     *   在本地数据库中管理 BVID，并尝试为之前上传失败或未获取到 BVID 的稿件更新信息。
     *   通过 `config.yaml` 配置文件，自定义视频标题（支持 `{time}` 时间占位符）、简介、标签、封面等。
+    *   为无弹幕版本（直接上传的 `.flv` 文件）自动添加标题后缀，以区分有弹幕版本。
 *   **⚙️ 稳定且定时的自动化流程:**
     *   使用 APScheduler 定期执行完整的处理流水线（清理、转换、压制、上传）。
     *   基于 FastAPI 的后端服务，用于管理直播场次、已上传视频记录，并支持手动触发各项任务。
@@ -35,6 +37,7 @@
     *   使用 SQLite 数据库 (`app_data.db`) 存储直播场次信息和已上传视频的元数据。
 *   **🔧 灵活配置:**
     *   工作目录路径、FFmpeg/FFprobe 可执行文件位置、最小文件大小限制、弹幕字体、B站上传参数以及定时任务周期均可配置。
+    *   支持选择是否跳过视频压制步骤，灵活平衡处理质量和效率。
 
 ## 🌊 工作流程概览
 
@@ -46,17 +49,24 @@
     *   根据直播状态变化，在 `app_data.db` 数据库的 `StreamSession` 表中更新或创建直播场次的开始和结束时间。
 3.  **视频处理流水线 (定时任务):**
     *   **文件清理:** `video_processor.py` 删除 `PROCESSING_FOLDER` 中过小或不完整的 `.flv` 文件及其对应的 `.xml` 文件。
-    *   **弹幕转换:** 对于有效的 `.flv` 文件，其对应的 `.xml` 弹幕文件会被转换为 `.ass` 字幕文件。
-    *   **视频压制:** `.flv` 文件将与对应的 `.ass` 弹幕文件进行硬编码，压制成 `.mp4` 文件（使用 FFmpeg，支持 QSV 硬件加速）。输出的 `.mp4` 文件先暂存于 `PROCESSING_FOLDER`，成功后移动到 `UPLOAD_FOLDER` (待上传文件夹)。根据配置，原有的 `.flv`、`.ass` (以及 `.xml`) 文件会从 `PROCESSING_FOLDER` 中删除。
+    *   根据 `SKIP_VIDEO_ENCODING` 配置选择处理路径:
+        *   **弹幕转换与压制 (默认路径):** 
+            *   对于有效的 `.flv` 文件，其对应的 `.xml` 弹幕文件会被转换为 `.ass` 字幕文件。
+            *   `.flv` 文件将与对应的 `.ass` 弹幕文件进行硬编码，压制成 `.mp4` 文件（使用 FFmpeg，支持 QSV 硬件加速）。
+            *   输出的 `.mp4` 文件先暂存于 `PROCESSING_FOLDER`，成功后移动到 `UPLOAD_FOLDER` (待上传文件夹)。
+        *   **直接处理 (当 SKIP_VIDEO_ENCODING=True):**
+            *   跳过弹幕转换和视频压制步骤。
+            *   直接将 `.flv` 文件从 `PROCESSING_FOLDER` 复制到 `UPLOAD_FOLDER` 目录。
+            *   上传时会在标题中添加"无弹幕版"后缀，以区分有弹幕版本。
     *   **BVID 更新:** `video_processor.py` 检查数据库中是否存在已上传但缺少 BVID 的视频记录。它会通过 `bilitool` 调用B站API，尝试根据视频标题匹配并更新这些记录的 BVID。
-    *   **上传至哔哩哔哩:** `video_processor.py` 扫描 `UPLOAD_FOLDER` 中新增的 `.mp4` 文件。
+    *   **上传至哔哩哔哩:** `video_processor.py` 扫描 `UPLOAD_FOLDER` 中新增的视频文件。
         *   查询数据库中的 `StreamSession` 直播场次信息，将视频文件按所属直播场次分组。
         *   如果某个视频是其所属场次的第一个待上传文件（或该场次之前没有成功上传并获得BVID的记录），则将其作为新稿件上传。
         *   上传成功后，尝试从B站获取这个新稿件的 BVID。
         *   该场次后续的其他视频文件，将作为分P追加到此前获取到的 BVID 之下。
         *   视频的标题、标签等投稿信息从 `config.yaml` 文件中读取。
         *   `app_data.db` 数据库中的 `UploadedVideo` 表会被相应更新。
-        *   根据配置，已成功上传的 `.mp4` 文件可以从 `UPLOAD_FOLDER` 中删除。
+        *   根据配置，已成功上传的视频文件可以从 `UPLOAD_FOLDER` 中删除。
 
 ### 时序图
 
@@ -178,11 +188,13 @@ sequenceDiagram
 
 1.  **`config.py`:**
     *   `PROCESSING_FOLDER`: 您的录制软件保存 `.flv` 和 `.xml` 文件的绝对路径。
-    *   `UPLOAD_FOLDER`: 处理完成的 `.mp4` 文件在上传前（以及可选地，上传后）存放的绝对路径。
+    *   `UPLOAD_FOLDER`: 处理完成的视频文件在上传前（以及可选地，上传后）存放的绝对路径。
     *   `YAML_CONFIG_PATH`: `config.yaml` 文件的路径 (默认为项目根目录下的 `config.yaml`)。
     *   `COOKIES_PATH`: 用于B站登录的 `cookies.json` 文件路径 (默认为项目根目录下的 `cookies.json`)。
     *   `MIN_FILE_SIZE_MB`: `.flv` 文件被视为有效的最小大小 (MB)。
     *   `FFPROBE_PATH`, `FFMPEG_PATH`: 如果 FFmpeg/FFprobe 不在系统 PATH 中，请指定其可执行文件的完整路径。
+    *   `SKIP_VIDEO_ENCODING`: 设置为 `True` 表示跳过视频压制步骤，直接上传原始 `.flv` 文件；设置为 `False`（默认）表示压制为 `.mp4` 后上传。
+    *   `NO_DANMAKU_TITLE_SUFFIX`: 无弹幕版本视频的标题后缀，当 `SKIP_VIDEO_ENCODING=True` 时使用。
     *   `SCHEDULE_INTERVAL_MINUTES`: 主要视频处理流水线的运行频率 (分钟)。
     *   `DELETE_UPLOADED_FILES`: 设置为 `True` 表示在成功上传到B站后删除本地的视频文件。
     *   `DEFAULT_STREAMER_NAME`, `STREAMER_NAME`, `DOUYU_ROOM_ID`: 用于斗鱼直播状态追踪的主播名称和房间号。
