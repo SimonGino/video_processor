@@ -5,7 +5,6 @@ import json
 import time
 import logging
 import shlex
-import schedule
 import shutil
 import yaml
 from datetime import datetime, timedelta

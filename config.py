@@ -36,6 +36,10 @@ FFMPEG_PATH = "ffmpeg"
 # --- 调度配置 ---
 # 定时任务执行间隔 (分钟)
 SCHEDULE_INTERVAL_MINUTES = 60
+# 检测主播状态的时间间隔 (分钟)
+STREAM_STATUS_CHECK_INTERVAL = 5
+# 检测主播状态时，开播时间向前调整的时间量 (分钟)
+STREAM_START_TIME_ADJUSTMENT = 5
 
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)

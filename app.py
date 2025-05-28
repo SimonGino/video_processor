@@ -295,7 +295,7 @@ async def scheduled_log_stream_end():
                         # 从未直播变为直播 - 记录上播时间
                         # 因为每隔几分钟才检查一次，所以实际开播时间可能比检测时间更早
                         # 将记录的开播时间往前调整5分钟（与定时任务执行频率一致）
-                        adjusted_start_time = current_time - timedelta(minutes=5)
+                        adjusted_start_time = current_time - timedelta(minutes=config.STREAM_START_TIME_ADJUSTMENT)
                         new_session = StreamSession(
                             streamer_name=streamer_name,
                             start_time=adjusted_start_time,
@@ -429,11 +429,11 @@ async def startup_event():
              scheduler.add_job(
                  scheduled_log_stream_end,
                  'interval',
-                 minutes=5,   # 每5分钟执行一次，足够检测状态变化，但不会太频繁
+                 minutes=config.STREAM_STATUS_CHECK_INTERVAL,   # 使用配置文件中设置的时间间隔
                  id='log_stream_end_job',
                  replace_existing=True
              )
-             logger.info("定时任务调度器：已添加 'log_stream_end_job'，每3分钟执行一次。")
+             logger.info(f"定时任务调度器：已添加 'log_stream_end_job'，每 {config.STREAM_STATUS_CHECK_INTERVAL} 分钟执行一次。")
              
              # 添加长时间未结束会话清理任务
              scheduler.add_job(
