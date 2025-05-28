@@ -32,6 +32,12 @@ FFPROBE_PATH = "ffprobe"
 # FFmpeg 可执行文件路径 (如果不在 PATH 中，请指定完整路径)
 FFMPEG_PATH = "ffmpeg"
 
+# --- 视频处理配置 ---
+# 是否跳过视频压制步骤 (True: 跳过压制直接上传FLV, False: 压制为MP4后上传)
+SKIP_VIDEO_ENCODING = True
+# 无弹幕版本视频的标题后缀 (当跳过压制时使用)
+NO_DANMAKU_TITLE_SUFFIX = "【无弹幕版】"
+
 
 # --- 调度配置 ---
 # 定时任务执行间隔 (分钟)
@@ -47,7 +53,7 @@ DELETE_UPLOADED_FILES = True
 
 # --- 处理时机控制 ---
 # 是否仅在主播下播后处理视频 (True: 仅下播后处理, False: 按定时任务处理)
-PROCESS_AFTER_STREAM_END = True
+PROCESS_AFTER_STREAM_END = False
 
 # --- API 配置 ---
 # API 服务器基础 URL

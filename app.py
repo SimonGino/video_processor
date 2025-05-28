@@ -157,14 +157,28 @@ async def scheduled_video_pipeline():
             scheduler_logger.error(f"定时任务：检查主播直播状态时出错: {e}", exc_info=True)
             # 出错时仍然继续处理，不因为检查出错而影响正常功能
 
+    # 检查是否配置了跳过视频压制
+    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    if is_skip_encoding:
+        scheduler_logger.info("定时任务：检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过弹幕压制步骤，直接处理 FLV 文件")
+
     # --- 1. 同步处理任务 (在线程池中运行避免阻塞) ---
     try:
         scheduler_logger.info("定时任务：执行文件清理...")
         await loop.run_in_executor(None, cleanup_small_files) # None 使用默认 ThreadPoolExecutor
-        scheduler_logger.info("定时任务：执行弹幕转换...")
-        await loop.run_in_executor(None, convert_danmaku)
-        scheduler_logger.info("定时任务：执行视频压制...")
+        
+        # 如果不跳过压制，先执行弹幕转换
+        if not is_skip_encoding:
+            scheduler_logger.info("定时任务：执行弹幕转换...")
+            await loop.run_in_executor(None, convert_danmaku)
+        else:
+            scheduler_logger.info("定时任务：已配置跳过压制，不执行弹幕转换")
+            
+        # 无论是否跳过压制，都调用 encode_video 函数
+        # encode_video 函数已被修改为在 SKIP_VIDEO_ENCODING=True 时直接复制 FLV 文件到上传目录
+        scheduler_logger.info("定时任务：处理视频文件...")
         await loop.run_in_executor(None, encode_video)
+        
         scheduler_logger.info("定时任务：同步处理任务完成。")
     except Exception as e:
         scheduler_logger.error(f"定时任务：同步处理任务执行过程中出错: {e}", exc_info=True)
@@ -726,9 +740,23 @@ def run_processing_sync():
     """同步执行处理任务，用于后台线程"""
     logger.info("后台任务：开始执行视频处理（清理、转换、压制）...")
     try:
+        # 清理小文件始终执行
         cleanup_small_files()
-        convert_danmaku()
+        
+        # 检查是否配置了跳过视频压制
+        is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+        
+        # 根据配置决定是否执行弹幕转换
+        if not is_skip_encoding:
+            logger.info("后台任务：执行弹幕转换...")
+            convert_danmaku()
+        else:
+            logger.info("后台任务：已配置跳过压制，不执行弹幕转换")
+        
+        # 处理视频文件 (encode_video 函数会根据配置决定是压制还是直接复制)
+        logger.info("后台任务：处理视频文件...")
         encode_video()
+        
         logger.info("后台任务：视频处理执行完成")
     except Exception as e:
         logger.error(f"后台任务：视频处理执行过程中出错: {e}")
@@ -759,9 +787,17 @@ async def trigger_processing_tasks(background_tasks: BackgroundTasks, db: AsyncS
             logger.error(f"手动触发：检查主播直播状态时出错: {e}", exc_info=True)
             # 出错时仍然继续处理，不因为检查出错而影响正常功能
     
+    # 检查是否配置了跳过视频压制
+    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    
     background_tasks.add_task(run_processing_sync)
-    logger.info("已将视频处理任务添加到后台执行队列 (手动触发)")
-    return {"message": "视频处理任务已开始在后台执行 (手动触发)"}
+    
+    if is_skip_encoding:
+        logger.info("已将视频处理任务添加到后台执行队列 (手动触发，跳过压制步骤)")
+        return {"message": "视频处理任务已开始在后台执行 (手动触发，跳过压制步骤，直接处理FLV文件)"}
+    else:
+        logger.info("已将视频处理任务添加到后台执行队列 (手动触发)")
+        return {"message": "视频处理任务已开始在后台执行 (手动触发，包含压制步骤)"}
 
 async def run_upload_async(db: AsyncSession):
     """异步执行上传任务，用于后台任务"""
@@ -806,11 +842,16 @@ async def trigger_upload_tasks(
             logger.error(f"手动触发：检查主播直播状态时出错: {e}", exc_info=True)
             # 出错时仍然继续处理，不因为检查出错而影响正常功能
     
+    # 检查是否配置了跳过视频压制
+    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    file_type = "FLV" if is_skip_encoding else "MP4"
+    
     # 注意：这里传递的 db 是通过 Depends(get_db) 获取的 request-scoped session
     # run_upload_async 需要能处理这种 session (它目前应该可以)
     background_tasks.add_task(run_upload_async, db) 
-    logger.info("已将BVID更新和上传任务添加到后台执行队列 (手动触发)")
-    return {"message": "BVID更新和上传任务已开始在后台执行 (手动触发)"}
+    
+    logger.info(f"已将BVID更新和上传任务添加到后台执行队列 (手动触发，将上传{file_type}文件)")
+    return {"message": f"BVID更新和上传任务已开始在后台执行 (手动触发，将上传{file_type}文件)"}
 
 # =================== 启动服务器 ===================
 
