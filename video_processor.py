@@ -509,7 +509,7 @@ async def upload_to_bilibili(db: AsyncSession):
     else:
         logging.info("将寻找并上传压制后的 MP4 文件")
         video_extension = "mp4"
-        title_suffix = ""  # 压制后的视频不需要特殊后缀
+        title_suffix = config.DANMAKU_TITLE_SUFFIX if hasattr(config, 'DANMAKU_TITLE_SUFFIX') else "【弹幕版】"  # 使用弹幕版后缀
 
     logging.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
     uploaded_count = 0
@@ -1103,3 +1103,5 @@ async def update_video_bvids(db: AsyncSession):
     
     except Exception as e:
         logging.error(f"更新视频BVID过程中发生错误: {e}")
+
+

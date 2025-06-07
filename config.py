@@ -34,9 +34,11 @@ FFMPEG_PATH = "ffmpeg"
 
 # --- 视频处理配置 ---
 # 是否跳过视频压制步骤 (True: 跳过压制直接上传FLV, False: 压制为MP4后上传)
-SKIP_VIDEO_ENCODING = True
+SKIP_VIDEO_ENCODING = False
 # 无弹幕版本视频的标题后缀 (当跳过压制时使用)
 NO_DANMAKU_TITLE_SUFFIX = "【无弹幕版】"
+# 弹幕版本视频的标题后缀 (当不跳过压制时使用)
+DANMAKU_TITLE_SUFFIX = "【弹幕版】"
 
 
 # --- 调度配置 ---
