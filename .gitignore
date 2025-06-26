@@ -4,3 +4,9 @@
 .idea
 .vscode
 .pytest_cache
+app_data.db
+config.local.yaml
+logs/
+*.log
+src/__pycache__/
+src/video_processor/__pycache__/
