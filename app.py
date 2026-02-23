@@ -21,13 +21,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import config
 from video_processor import (
     load_yaml_config,
-    cleanup_small_files,
-    convert_danmaku,
     encode_video,
     update_video_bvids,
     upload_to_bilibili,
     get_timestamp_from_filename
 )
+from danmaku import cleanup_small_files, convert_danmaku
 from models import Base, StreamSession, UploadedVideo, local_now
 from stream_monitor import StreamStatusMonitor
 
