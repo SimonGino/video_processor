@@ -97,15 +97,15 @@ async def upload_to_bilibili(db: AsyncSession):
         return
 
     # 检查是否跳过视频压制
-    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    is_skip_encoding = config.SKIP_VIDEO_ENCODING
     if is_skip_encoding:
         logging.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将寻找并上传 FLV 文件")
         video_extension = "flv"
-        title_suffix = config.NO_DANMAKU_TITLE_SUFFIX if hasattr(config, 'NO_DANMAKU_TITLE_SUFFIX') else "【无弹幕版】"
+        title_suffix = config.NO_DANMAKU_TITLE_SUFFIX
     else:
         logging.info("将寻找并上传压制后的 MP4 文件")
         video_extension = "mp4"
-        title_suffix = config.DANMAKU_TITLE_SUFFIX if hasattr(config, 'DANMAKU_TITLE_SUFFIX') else "【弹幕版】"  # 使用弹幕版后缀
+        title_suffix = config.DANMAKU_TITLE_SUFFIX
 
     logging.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
     uploaded_count = 0

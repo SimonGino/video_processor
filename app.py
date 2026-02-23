@@ -20,7 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
 from encoder import encode_video
-from video_processor import (
+from uploader import (
     load_yaml_config,
     update_video_bvids,
     upload_to_bilibili,
@@ -142,7 +142,7 @@ async def scheduled_video_pipeline():
         scheduler_logger.info(f"定时任务：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制和上传任务")
 
     # 检查是否配置了跳过视频压制
-    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    is_skip_encoding = config.SKIP_VIDEO_ENCODING
     if is_skip_encoding:
         scheduler_logger.info("定时任务：检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过弹幕压制步骤，直接处理 FLV 文件")
 
@@ -653,7 +653,7 @@ def run_processing_sync():
         cleanup_small_files()
         
         # 检查是否配置了跳过视频压制
-        is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+        is_skip_encoding = config.SKIP_VIDEO_ENCODING
         
         # 根据配置决定是否执行弹幕转换
         if not is_skip_encoding:
@@ -683,7 +683,7 @@ async def trigger_processing_tasks(background_tasks: BackgroundTasks, db: AsyncS
         logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制任务")
     
     # 检查是否配置了跳过视频压制
-    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    is_skip_encoding = config.SKIP_VIDEO_ENCODING
     
     background_tasks.add_task(run_processing_sync)
     
@@ -724,7 +724,7 @@ async def trigger_upload_tasks(
         logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行上传任务")
     
     # 检查是否配置了跳过视频压制
-    is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
+    is_skip_encoding = config.SKIP_VIDEO_ENCODING
     file_type = "FLV" if is_skip_encoding else "MP4"
     
     # 注意：这里传递的 db 是通过 Depends(get_db) 获取的 request-scoped session
