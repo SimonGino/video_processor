@@ -1,15 +1,13 @@
 import os
 import uvicorn
-import requests
 import logging
 import argparse
-import threading
 import time
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, AsyncGenerator
 from urllib.parse import urlparse
-import aiohttp
+from functools import partial
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,18 +19,17 @@ from sqlalchemy.orm import sessionmaker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
-# 导入 video_processor.py 中的函数
 from video_processor import (
-    load_yaml_config, 
-    cleanup_small_files, 
-    convert_danmaku, 
-    encode_video, 
-    update_video_bvids, 
+    load_yaml_config,
+    cleanup_small_files,
+    convert_danmaku,
+    encode_video,
+    update_video_bvids,
     upload_to_bilibili,
-    get_timestamp_from_filename  # 导入从文件名解析时间戳的函数
+    get_timestamp_from_filename
 )
-# 导入模型
-from models import Base, StreamSession, UploadedVideo
+from models import Base, StreamSession, UploadedVideo, local_now
+from stream_monitor import StreamStatusMonitor
 
 # =================== 数据库设置 ===================
 
@@ -126,6 +123,7 @@ app.add_middleware(
 
 # --- 定时任务逻辑 ---
 scheduler = AsyncIOScheduler()
+stream_monitors: dict[str, StreamStatusMonitor] = {}
 
 async def scheduled_video_pipeline():
     """定时执行的完整视频处理和上传流程"""
@@ -133,29 +131,16 @@ async def scheduled_video_pipeline():
     loop = asyncio.get_running_loop()
     start_time = time.time()
 
-    # 检查是否启用了"仅下播后处理"功能
-    if hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
-        # 检查主播是否正在直播
-        try:
-            scheduler_logger.info("定时任务：检查主播是否在直播中...")
-            async with AsyncSessionLocal() as session:
-                query = select(StreamSession).filter(
-                    StreamSession.streamer_name == config.STREAMER_NAME,
-                    StreamSession.start_time.is_not(None),
-                    StreamSession.end_time.is_(None)  # 没有end_time表示正在直播
-                ).order_by(desc(StreamSession.start_time)).limit(1)
-                
-                result = await session.execute(query)
-                current_stream = result.scalars().first()
-                
-                if current_stream:
-                    scheduler_logger.info(f"定时任务：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，跳过压制和上传任务")
-                    return  # 主播正在直播，跳过后续处理
-                else:
-                    scheduler_logger.info(f"定时任务：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制和上传任务")
-        except Exception as e:
-            scheduler_logger.error(f"定时任务：检查主播直播状态时出错: {e}", exc_info=True)
-            # 出错时仍然继续处理，不因为检查出错而影响正常功能
+    # Check if "process only after stream ends" is enabled
+    if config.PROCESS_AFTER_STREAM_END:
+        monitor = stream_monitors.get(config.STREAMER_NAME)
+        if monitor and monitor.is_live():
+            scheduler_logger.info(
+                f"定时任务：检测到主播 {config.STREAMER_NAME} 正在直播中，"
+                f"当前配置为仅下播后处理，跳过压制和上传任务"
+            )
+            return
+        scheduler_logger.info(f"定时任务：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制和上传任务")
 
     # 检查是否配置了跳过视频压制
     is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
@@ -205,169 +190,86 @@ async def scheduled_video_pipeline():
     end_time = time.time()
     scheduler_logger.info(f"定时任务：视频处理和上传流程执行完毕。总耗时: {end_time - start_time:.2f} 秒。")
 
-async def scheduled_log_stream_end():
-    """定时任务：检查主播状态并记录上下播时间
-    
-    逻辑：
-    1. 检查主播当前是否在直播
-    2. 如果状态发生变化（从不直播变为直播，或从直播变为不直播），则记录对应时间
-    3. 对于上播：创建新记录，只填充start_time
-    4. 对于下播：查找最近一条没有end_time的记录，填充end_time
+async def scheduled_log_stream_end(streamer_name: str):
+    """Scheduled task: check streamer status and record start/end times.
+
+    Uses StreamStatusMonitor.detect_change() for state tracking
+    instead of function-attribute caching.
     """
-    # !! 注意: 依赖于 config.py 中的 STREAMER_NAME 设置
-    if not hasattr(config, 'STREAMER_NAME') or not config.STREAMER_NAME:
-        scheduler_logger.error("定时任务(log_stream_end): 未在 config.py 中配置STREAMER_NAME，任务跳过。")
+    monitor = stream_monitors.get(streamer_name)
+    if not monitor:
+        scheduler_logger.error(f"定时任务(log_stream_end): 未找到主播 {streamer_name} 的监控实例")
         return
 
-    streamer_name = config.STREAMER_NAME
-    current_time = datetime.now()
-    
-    # 使用缓存跟踪上次检查的直播状态
-    # 首次运行时，从数据库加载上次状态
-    if not hasattr(scheduled_log_stream_end, "last_stream_status"):
+    current_time = local_now()
+    change = await monitor.detect_change()
+
+    if change is None:
+        # No change or API error — skip
+        scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: {'直播中' if monitor.is_live() else '未直播'}")
+        return
+
+    old_status, new_status = change
+    scheduler_logger.info(
+        f"检测到主播 {streamer_name} 状态变化: "
+        f"{'未直播→直播中' if new_status else '直播中→未直播'}"
+    )
+
+    async with AsyncSessionLocal() as db:
         try:
-            # 从数据库获取最近一条直播记录，确定初始状态
-            async with AsyncSessionLocal() as db:
-                # 查找最近一条记录
+            if new_status:
+                # Went live — record start time (adjusted backward)
+                adjusted_start_time = current_time - timedelta(minutes=config.STREAM_START_TIME_ADJUSTMENT)
+                new_session = StreamSession(
+                    streamer_name=streamer_name,
+                    start_time=adjusted_start_time,
+                    end_time=None
+                )
+                db.add(new_session)
+                scheduler_logger.info(
+                    f"已记录主播 {streamer_name} 的上播时间: {adjusted_start_time} "
+                    f"(已自动调整-{config.STREAM_START_TIME_ADJUSTMENT}分钟)"
+                )
+            else:
+                # Went offline — find open session and set end_time
                 query = select(StreamSession).filter(
-                    StreamSession.streamer_name == streamer_name
-                ).order_by(desc(StreamSession.created_at)).limit(1)
-                
+                    StreamSession.streamer_name == streamer_name,
+                    StreamSession.start_time.is_not(None),
+                    StreamSession.end_time.is_(None)
+                ).order_by(desc(StreamSession.start_time))
+
                 result = await db.execute(query)
-                last_session = result.scalars().first()
-                
-                if last_session:
-                    # 如果有start_time但没有end_time，则认为上次状态是直播中
-                    if last_session.start_time and not last_session.end_time:
-                        scheduled_log_stream_end.last_stream_status = True
-                    else:
-                        scheduled_log_stream_end.last_stream_status = False
+                recent_session = result.scalars().first()
+
+                if recent_session:
+                    recent_session.end_time = current_time
+                    scheduler_logger.info(f"已记录主播 {streamer_name} 的下播时间: {current_time}")
                 else:
-                    # 没有历史记录，假设初始状态为未直播
-                    scheduled_log_stream_end.last_stream_status = False
-                    
-                scheduler_logger.info(f"初始化直播状态检测：当前主播 {streamer_name} 状态为 {'直播中' if scheduled_log_stream_end.last_stream_status else '未直播'}")
+                    new_session = StreamSession(
+                        streamer_name=streamer_name,
+                        start_time=None,
+                        end_time=current_time
+                    )
+                    db.add(new_session)
+                    scheduler_logger.info(f"创建新记录并添加主播 {streamer_name} 的下播时间: {current_time}")
+
+            await db.commit()
+
+            # If streamer went offline and PROCESS_AFTER_STREAM_END is enabled,
+            # schedule a delayed pipeline run instead of blocking with sleep
+            if not new_status and config.PROCESS_AFTER_STREAM_END:
+                scheduler_logger.info("检测到主播下播，且已启用'仅下播后处理'选项，3分钟后触发视频处理和上传流程")
+                scheduler.add_job(
+                    scheduled_video_pipeline,
+                    'date',
+                    run_date=local_now() + timedelta(minutes=3),
+                    id=f'post_stream_pipeline_{streamer_name}',
+                    replace_existing=True
+                )
+
         except Exception as e:
-            scheduler_logger.error(f"初始化直播状态检测时出错: {e}", exc_info=True)
-            # 出错时假设为未直播状态
-            scheduled_log_stream_end.last_stream_status = False
-    
-    # 检查主播是否真的在直播
-    try:
-        # 获取主播房间号
-        room_id = config.DOUYU_ROOM_ID  # 需要在 config.py 中配置主播的房间号
-        
-        # 构建请求头
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Referer': 'https://www.douyu.com',
-            'Origin': 'https://www.douyu.com'
-        }
-        
-        # 获取直播间信息
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://www.douyu.com/betard/{room_id}", headers=headers) as response:
-                if response.status != 200:
-                    scheduler_logger.error(f"获取直播间信息失败: HTTP {response.status}")
-                    return
-                    
-                room_info = await response.json()
-                if not room_info or 'room' not in room_info:
-                    scheduler_logger.error("获取直播间信息失败: 返回数据格式错误")
-                    return
-                    
-                room_data = room_info['room']
-                
-                # 检查直播状态
-                is_streaming = True  # 默认假设在直播
-                
-                # 如果直播状态不是1，或者在播放录播，则认为未在直播
-                if room_data['show_status'] != 1 or room_data['videoLoop'] != 0:
-                    is_streaming = False
-                
-                # 检查是否在运行互动游戏（如果配置禁用该检查）
-                if is_streaming and hasattr(config, 'DOUYU_DISABLE_INTERACTIVE_GAME') and config.DOUYU_DISABLE_INTERACTIVE_GAME:
-                    async with session.get(f"https://www.douyu.com/api/interactive/web/v2/list?rid={room_id}", headers=headers) as game_response:
-                        if game_response.status == 200:
-                            game_info = await game_response.json()
-                            if game_info.get('data'):
-                                is_streaming = False
-                                scheduler_logger.info(f"主播 {streamer_name} 正在运行互动游戏，视为未直播")
-        
-        # 状态变化检测
-        last_status = getattr(scheduled_log_stream_end, "last_stream_status", False)
-        status_changed = is_streaming != last_status
-        
-        # 仅当状态发生变化时记录
-        if status_changed:
-            scheduler_logger.info(f"检测到主播 {streamer_name} 状态变化: {'未直播→直播中' if is_streaming else '直播中→未直播'}")
-            
-            # 需要为定时任务创建独立的 DB Session
-            async with AsyncSessionLocal() as db:
-                try:
-                    if is_streaming:
-                        # 从未直播变为直播 - 记录上播时间
-                        # 因为每隔几分钟才检查一次，所以实际开播时间可能比检测时间更早
-                        # 将记录的开播时间往前调整5分钟（与定时任务执行频率一致）
-                        adjusted_start_time = current_time - timedelta(minutes=config.STREAM_START_TIME_ADJUSTMENT)
-                        new_session = StreamSession(
-                            streamer_name=streamer_name,
-                            start_time=adjusted_start_time,
-                            end_time=None  # 临时填充一个未来值，避免非空约束
-                        )
-                        db.add(new_session)
-                        scheduler_logger.info(f"已记录主播 {streamer_name} 的上播时间: {adjusted_start_time} (已自动调整-5分钟)")
-                    else:
-                        # 从直播变为未直播 - 记录下播时间
-                        # 查找最近一条有start_time但没有end_time的记录
-                        query = select(StreamSession).filter(
-                            StreamSession.streamer_name == streamer_name,
-                            StreamSession.start_time.is_not(None),
-                            StreamSession.end_time == None  # 使用None而不是is_null()
-                        ).order_by(desc(StreamSession.start_time))
-                        
-                        result = await db.execute(query)
-                        recent_session = result.scalars().first()
-                        
-                        if recent_session:
-                            # 更新end_time
-                            recent_session.end_time = current_time
-                            scheduler_logger.info(f"已记录主播 {streamer_name} 的下播时间: {current_time}")
-                        else:
-                            # 未找到匹配的记录，创建新记录
-                            new_session = StreamSession(
-                                streamer_name=streamer_name,
-                                start_time=None,  # 未知上播时间
-                                end_time=current_time
-                            )
-                            db.add(new_session)
-                            scheduler_logger.info(f"创建新记录并添加主播 {streamer_name} 的下播时间: {current_time}")
-                    
-                    # 提交变更
-                    await db.commit()
-                    # 更新状态缓存
-                    scheduled_log_stream_end.last_stream_status = is_streaming
-                    
-                    # 如果检测到下播且启用了"仅下播后处理"，则立即触发处理任务
-                    if not is_streaming and hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
-                        scheduler_logger.info("检测到主播下播，且已启用'仅下播后处理'选项，立即触发视频处理和上传流程...")
-                        # 等待几分钟后再执行，确保直播结束后录制软件有足够时间保存文件
-                        await asyncio.sleep(180)  # 等待3分钟
-                        # 使用单独的会话以避免会话超时
-                        asyncio.create_task(scheduled_video_pipeline())  # 异步创建任务，不等待完成
-                        
-                except Exception as e:
-                    scheduler_logger.error(f"定时任务(log_stream_end): 记录直播状态时出错: {e}", exc_info=True)
-                    await db.rollback()
-                finally:
-                    await db.close() # 确保会话关闭
-        else:
-            # 状态未变化，不做记录
-            status_desc = "直播中" if is_streaming else "未直播"
-            scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: {status_desc}")
-                
-    except Exception as e:
-        scheduler_logger.error(f"定时任务(log_stream_end): 检查直播状态时出错: {e}", exc_info=True)
+            scheduler_logger.error(f"定时任务(log_stream_end): 记录直播状态时出错: {e}", exc_info=True)
+            await db.rollback()
 
 async def clean_stale_sessions():
     """定时任务：检查并清理长时间未正常结束的直播会话
@@ -380,7 +282,7 @@ async def clean_stale_sessions():
     try:
         async with AsyncSessionLocal() as db:
             # 查找所有开始时间超过24小时但没有结束时间的会话
-            yesterday = datetime.now() - timedelta(hours=24)
+            yesterday = local_now() - timedelta(hours=24)
             query = select(StreamSession).filter(
                 StreamSession.start_time.is_not(None),
                 StreamSession.start_time < yesterday,
@@ -399,8 +301,8 @@ async def clean_stale_sessions():
                 # 设置结束时间为开始时间后12小时（假设最长直播12小时）
                 suggested_end_time = session.start_time + timedelta(hours=12)
                 # 如果建议的结束时间超过当前时间，使用当前时间
-                if suggested_end_time > datetime.now():
-                    suggested_end_time = datetime.now()
+                if suggested_end_time > local_now():
+                    suggested_end_time = local_now()
                     
                 session.end_time = suggested_end_time
                 logger.info(f"已清理长时间未结束的会话 ID:{session.id}，设置结束时间为 {suggested_end_time}")
@@ -418,50 +320,58 @@ async def startup_event():
     logger.info("正在初始化数据库...")
     await init_db()
     logger.info("数据库初始化完成")
-    
+
     logger.info("正在加载 YAML 配置...")
     if not load_yaml_config():
         logger.error("无法加载或验证配置文件 config.yaml，部分 API 和定时任务可能无法正常工作")
     else:
         logger.info("YAML 配置加载完成")
 
+    # Initialize stream monitors from config
+    for streamer_cfg in config.STREAMERS:
+        name = streamer_cfg["name"]
+        room_id = streamer_cfg["room_id"]
+        monitor = StreamStatusMonitor(room_id, name)
+        await monitor.initialize()
+        stream_monitors[name] = monitor
+        logger.info(f"已初始化主播 {name} (房间号: {room_id}) 的状态监控")
+
     logger.info("正在启动定时任务调度器...")
     try:
-        # 从 config 文件获取间隔时间
         interval_minutes = config.SCHEDULE_INTERVAL_MINUTES
         scheduler.add_job(
-            scheduled_video_pipeline, 
-            'interval', 
-            minutes=interval_minutes, 
-            id='video_pipeline_job', 
+            scheduled_video_pipeline,
+            'interval',
+            minutes=interval_minutes,
+            id='video_pipeline_job',
             replace_existing=True,
-            next_run_time=datetime.now() # 应用启动后立即运行一次 (可选)
+            next_run_time=local_now()
         )
-        # 添加直播状态检测任务
-        # !! 注意: 确保 config.py 中已定义 STREAMER_NAME
-        if hasattr(config, 'STREAMER_NAME') and config.STREAMER_NAME:
-             scheduler.add_job(
-                 scheduled_log_stream_end,
-                 'interval',
-                 minutes=config.STREAM_STATUS_CHECK_INTERVAL,   # 使用配置文件中设置的时间间隔
-                 id='log_stream_end_job',
-                 replace_existing=True
-             )
-             logger.info(f"定时任务调度器：已添加 'log_stream_end_job'，每 {config.STREAM_STATUS_CHECK_INTERVAL} 分钟执行一次。")
-             
-             # 添加长时间未结束会话清理任务
-             scheduler.add_job(
-                 clean_stale_sessions,
-                 'interval',
-                 hours=12,   # 每12小时执行一次
-                 id='clean_stale_sessions_job',
-                 replace_existing=True
-             )
-             logger.info("定时任务调度器：已添加 'clean_stale_sessions_job'，每12小时执行一次。")
-        else:
-             logger.warning("定时任务调度器：未添加 'log_stream_end_job'，因为 config.py 中未配置 STREAMER_NAME。")
+
+        # Add per-streamer status check jobs
+        for name, monitor in stream_monitors.items():
+            scheduler.add_job(
+                partial(scheduled_log_stream_end, name),
+                'interval',
+                minutes=config.STREAM_STATUS_CHECK_INTERVAL,
+                id=f'log_stream_end_{name}',
+                replace_existing=True
+            )
+            logger.info(f"定时任务调度器：已添加主播 {name} 的状态检测任务，每 {config.STREAM_STATUS_CHECK_INTERVAL} 分钟执行一次")
+
+        # Stale session cleanup job
+        if stream_monitors:
+            scheduler.add_job(
+                clean_stale_sessions,
+                'interval',
+                hours=12,
+                id='clean_stale_sessions_job',
+                replace_existing=True
+            )
+            logger.info("定时任务调度器：已添加 'clean_stale_sessions_job'，每12小时执行一次")
+
         scheduler.start()
-        logger.info(f"定时任务调度器已启动，每 {interval_minutes} 分钟执行一次 'video_pipeline_job'。")
+        logger.info(f"定时任务调度器已启动，每 {interval_minutes} 分钟执行一次 'video_pipeline_job'")
     except Exception as e:
         logger.error(f"启动定时任务调度器失败: {e}", exc_info=True)
 
@@ -484,7 +394,7 @@ async def log_stream_end(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        end_time = request.end_time or datetime.now()
+        end_time = request.end_time or local_now()
         
         new_session = StreamSession(
             streamer_name=request.streamer_name,
@@ -716,7 +626,7 @@ async def log_stream_start(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        start_time = request.start_time or datetime.now()
+        start_time = request.start_time or local_now()
         
         new_session = StreamSession(
             streamer_name=request.streamer_name,
@@ -765,27 +675,13 @@ def run_processing_sync():
 async def trigger_processing_tasks(background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """触发后台执行清理、转换、压制任务"""
     
-    # 检查是否启用了"仅下播后处理"功能且是手动触发
-    if hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
-        # 检查主播是否正在直播
-        try:
-            query = select(StreamSession).filter(
-                StreamSession.streamer_name == config.STREAMER_NAME,
-                StreamSession.start_time.is_not(None),
-                StreamSession.end_time.is_(None)  # 没有end_time表示正在直播
-            ).order_by(desc(StreamSession.start_time)).limit(1)
-            
-            result = await db.execute(query)
-            current_stream = result.scalars().first()
-            
-            if current_stream:
-                logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行压制任务")
-                return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行压制任务"}
-            else:
-                logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制任务")
-        except Exception as e:
-            logger.error(f"手动触发：检查主播直播状态时出错: {e}", exc_info=True)
-            # 出错时仍然继续处理，不因为检查出错而影响正常功能
+    # Check if "process only after stream ends" is enabled
+    if config.PROCESS_AFTER_STREAM_END:
+        monitor = stream_monitors.get(config.STREAMER_NAME)
+        if monitor and monitor.is_live():
+            logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行压制任务")
+            return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行压制任务"}
+        logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制任务")
     
     # 检查是否配置了跳过视频压制
     is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING
@@ -820,27 +716,13 @@ async def trigger_upload_tasks(
 ):
     """触发后台执行BVID更新和上传任务"""
     
-    # 检查是否启用了"仅下播后处理"功能且是手动触发
-    if hasattr(config, 'PROCESS_AFTER_STREAM_END') and config.PROCESS_AFTER_STREAM_END:
-        # 检查主播是否正在直播
-        try:
-            query = select(StreamSession).filter(
-                StreamSession.streamer_name == config.STREAMER_NAME,
-                StreamSession.start_time.is_not(None),
-                StreamSession.end_time.is_(None)  # 没有end_time表示正在直播
-            ).order_by(desc(StreamSession.start_time)).limit(1)
-            
-            result = await db.execute(query)
-            current_stream = result.scalars().first()
-            
-            if current_stream:
-                logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行上传任务")
-                return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行上传任务"}
-            else:
-                logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行上传任务")
-        except Exception as e:
-            logger.error(f"手动触发：检查主播直播状态时出错: {e}", exc_info=True)
-            # 出错时仍然继续处理，不因为检查出错而影响正常功能
+    # Check if "process only after stream ends" is enabled
+    if config.PROCESS_AFTER_STREAM_END:
+        monitor = stream_monitors.get(config.STREAMER_NAME)
+        if monitor and monitor.is_live():
+            logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行上传任务")
+            return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行上传任务"}
+        logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行上传任务")
     
     # 检查是否配置了跳过视频压制
     is_skip_encoding = hasattr(config, 'SKIP_VIDEO_ENCODING') and config.SKIP_VIDEO_ENCODING

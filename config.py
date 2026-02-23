@@ -72,6 +72,7 @@ STREAMERS = [
 DEFAULT_STREAMER_NAME = STREAMERS[0]["name"]
 STREAMER_NAME = STREAMERS[0]["name"]
 DOUYU_ROOM_ID = STREAMERS[0]["room_id"]
+
 # --- 其他 ---
 # 确保处理和上传目录存在
 os.makedirs(PROCESSING_FOLDER, exist_ok=True)
