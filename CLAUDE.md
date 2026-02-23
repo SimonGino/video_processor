@@ -33,9 +33,12 @@ No tests or linting are configured.
 
 Flat single-directory layout (no sub-packages):
 
-- `app.py` — Entry point: FastAPI app, API endpoints, APScheduler jobs, DB setup
+- `app.py` — Entry point: FastAPI app, API endpoints, DB setup, startup/shutdown
+- `scheduler.py` — APScheduler task functions (video pipeline, stream status check, stale session cleanup)
+- `danmaku.py` — Danmaku processing: file cleanup (`cleanup_small_files`), XML→ASS conversion (`convert_danmaku`)
+- `encoder.py` — Video encoding: FFmpeg QSV encoding, skip-encoding mode (`encode_video`)
+- `uploader.py` — Bilibili upload: video upload, BVID management, YAML config loading
 - `stream_monitor.py` — StreamStatusMonitor class: per-streamer Douyu API polling and state tracking
-- `video_processor.py` — Core processing: file cleanup, danmaku conversion, video encoding, Bilibili upload
 - `config.py` — All configuration constants (paths, intervals, feature flags, streamer list)
 - `config.yaml` — Bilibili upload metadata (title template with `{time}` placeholder, tags, category, description)
 - `models.py` — SQLAlchemy models: `StreamSession`, `UploadedVideo`
@@ -43,8 +46,9 @@ Flat single-directory layout (no sub-packages):
 
 ## Architecture
 
-- **Sync-in-async pattern**: Synchronous video processing functions (FFmpeg, file ops) run via `loop.run_in_executor()` to avoid blocking the async event loop
-- **3 scheduled jobs**: video pipeline (default 60min), stream status check (default 10min), stale session cleanup (12h)
+- **Sync-in-async pattern**: Synchronous video processing functions in `danmaku.py` and `encoder.py` (FFmpeg, file ops) run via `loop.run_in_executor()` in `scheduler.py` to avoid blocking the async event loop
+- **3 scheduled jobs** (in `scheduler.py`): video pipeline (default 60min), stream status check (default 10min), stale session cleanup (12h)
+- **Circular dependency**: `scheduler.py` uses late import (`_get_app_deps()`) to access `AsyncSessionLocal`, `scheduler`, and `stream_monitors` from `app.py`
 - **Session-based upload grouping**: Videos are matched to stream sessions by time range. First video creates a new Bilibili submission; subsequent videos append as multi-part (分P)
 - **BVID retrieval**: Retry logic (3 attempts with delays) after upload to fetch the generated BVID
 - **Stream status detection**: `StreamStatusMonitor` class (`stream_monitor.py`) polls Douyu API per-streamer with 10s timeout. State cached in class instance, initialized from API on startup (not DB). Multi-streamer support via `config.STREAMERS` list
