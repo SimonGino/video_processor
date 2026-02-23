@@ -64,11 +64,14 @@ API_BASE_URL = "http://localhost:50009"
 API_ENABLED = True
 
 # --- 主播配置 ---
-# 默认主播名称 (用于记录直播场次和查询 BVID)
-DEFAULT_STREAMER_NAME = "银剑君"
-STREAMER_NAME = "银剑君"
-DOUYU_ROOM_ID = "251783"
-
+# 主播列表 (支持多主播监控)
+STREAMERS = [
+    {"name": "银剑君", "room_id": "251783"},
+]
+# Backward compatibility
+DEFAULT_STREAMER_NAME = STREAMERS[0]["name"]
+STREAMER_NAME = STREAMERS[0]["name"]
+DOUYU_ROOM_ID = STREAMERS[0]["room_id"]
 # --- 其他 ---
 # 确保处理和上传目录存在
 os.makedirs(PROCESSING_FOLDER, exist_ok=True)
