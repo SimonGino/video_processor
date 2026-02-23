@@ -19,9 +19,9 @@ from sqlalchemy.orm import sessionmaker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
+from encoder import encode_video
 from video_processor import (
     load_yaml_config,
-    encode_video,
     update_video_bvids,
     upload_to_bilibili,
     get_timestamp_from_filename
