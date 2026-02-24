@@ -23,7 +23,7 @@ async def run_one_segment(
     duration_seconds: int,
     ffmpeg_path: str,
     ws_url: str,
-) -> None:
+) -> int:
     flv_part = Path(flv_part_path)
     xml_part = Path(xml_part_path)
     flv_part.parent.mkdir(parents=True, exist_ok=True)
@@ -49,8 +49,6 @@ async def run_one_segment(
     )
 
     rc, _ = await asyncio.gather(record_task, danmaku_task)
-    if rc != 0:
-        raise RuntimeError(f"ffmpeg exited with code {rc}")
 
     flv_final = _finalize_part_path(flv_part)
     xml_final = _finalize_part_path(xml_part)
@@ -60,3 +58,4 @@ async def run_one_segment(
     if xml_part.exists():
         xml_part.replace(xml_final)
 
+    return int(rc)
