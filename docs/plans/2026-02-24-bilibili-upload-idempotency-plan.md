@@ -37,7 +37,6 @@ Expected: new directory created and checked out
 Create `tests/unit/test_uploader_idempotency.py`:
 
 ```python
-import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -96,13 +95,6 @@ async def test_pending_bvid_session_skips_new_upload(tmp_path: Path, monkeypatch
     monkeypatch.setattr(uploader, "LoginController", FakeLoginController)
     monkeypatch.setattr(uploader, "UploadController", lambda: fake_uploader)
     monkeypatch.setattr(uploader, "FeedController", FakeFeedController)
-
-    # Avoid real sleeping in tests
-    async def _fake_sleep(_seconds: float):
-        return None
-
-    monkeypatch.setattr(uploader.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(uploader.time, "sleep", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("time.sleep should not be called")))
 
     # --- Arrange: temp upload folder with one MP4 file ---
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
@@ -241,12 +233,6 @@ async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path,
     monkeypatch.setattr(uploader, "UploadController", lambda: fake_uploader)
     monkeypatch.setattr(uploader, "FeedController", FakeFeedController)
 
-    async def _fake_sleep(_seconds: float):
-        return None
-
-    monkeypatch.setattr(uploader.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(uploader.time, "sleep", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("time.sleep should not be called")))
-
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
@@ -316,6 +302,8 @@ Expected: FAIL（当前实现通常会从 `P2` 开始，且 `video_name` 为 `No
 
 1. 用时间窗计数（`COUNT` 或 `scalars().all()` 都可，但优先 `COUNT`）计算 `start_part_number`  
 2. 调用 `append_video_entry(..., video_name=part_title)`
+
+并在 `uploader.py` 顶部补充必要 import：`from sqlalchemy import func`。
 
 ```python
 # Count all uploaded records in the session window to compute next part number.
@@ -400,7 +388,9 @@ async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path:
         sleep_calls.append(seconds)
         return None
 
-    monkeypatch.setattr(uploader.asyncio, "sleep", _fake_sleep)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(uploader, "asyncio", SimpleNamespace(sleep=_fake_sleep), raising=False)
     monkeypatch.setattr(uploader.time, "sleep", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("time.sleep should not be called")))
 
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
@@ -497,4 +487,3 @@ git commit -m "fix: add buffered session time window"
 
 Run: `uv run pytest -v`  
 Expected: PASS
-
