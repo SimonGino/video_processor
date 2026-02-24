@@ -306,6 +306,21 @@ async def upload_to_bilibili(db: AsyncSession):
         if existing_record:
             existing_bvid = existing_record.bvid
             logging.info(f"该直播场次已有上传记录，BVID: {existing_bvid}")
+
+        if not existing_bvid:
+            pending_query = select(UploadedVideo).filter(
+                UploadedVideo.upload_time.between(period_start, period_end),
+                UploadedVideo.bvid.is_(None),
+            ).order_by(desc(UploadedVideo.upload_time)).limit(1)
+            pending_result = await db.execute(pending_query)
+            pending_record = pending_result.scalars().first()
+
+            if pending_record:
+                logging.info(
+                    f"直播场次 ID:{session_id} 已存在待回填BVID的上传记录，"
+                    "本次跳过创建新稿件，等待BVID回填后再追加分P"
+                )
+                continue
         
         # 根据是否有BVID决定上传方式
         if existing_bvid:
@@ -699,5 +714,4 @@ async def update_video_bvids(db: AsyncSession):
     
     except Exception as e:
         logging.error(f"更新视频BVID过程中发生错误: {e}")
-
 
