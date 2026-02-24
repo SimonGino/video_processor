@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-BiliBili 全自动录播上传套件 — Automated Douyu live stream recording processor and Bilibili uploader. Monitors streamer status on Douyu, processes recorded FLV videos (danmaku embedding via FFmpeg), and uploads to Bilibili with smart session-based grouping.
+斗鱼录播到 B 站一站式自动化套件 — One-stop Douyu-to-Bilibili recording, danmaku processing, encoding, and upload workflow. Monitors streamer status on Douyu, records/processes FLV + danmaku, and uploads to Bilibili with smart session-based grouping.
 
 ## Tech Stack
 

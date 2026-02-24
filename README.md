@@ -1,6 +1,8 @@
-# BiliBili 全自动录播上传套件
+# 斗鱼录播到 B 站一站式自动化套件
 
-全自动处理直播录播文件并上传到哔哩哔哩的工具套件。
+一个面向「斗鱼 -> B站」场景的闭环自动化方案：从直播状态监控与录制、弹幕采集与转换、视频压制，到 B 站自动上传与分P管理，全部一站式完成。
+
+适用范围：当前专注于「斗鱼 -> B站」录播工作流，不是多平台通用方案。
 
 - **直播状态监控** — 定时检测斗鱼主播上下线，记录直播场次
 - **内建录制（可选）** — FFmpeg 录制直播流为 FLV，同时采集弹幕 XML
@@ -55,8 +57,8 @@ Python 依赖（通过 `uv sync` 自动安装）：
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/SimonGino/video_processor.git
-cd video_processor
+git clone https://github.com/SimonGino/douyu-to-bilibili-suite.git
+cd douyu-to-bilibili-suite
 
 # 2. 安装 Python 依赖
 uv sync
@@ -266,7 +268,7 @@ dynamic: ''                          # 动态信息
 ## 项目结构
 
 ```
-video_processor/
+douyu-to-bilibili-suite/
 ├── app.py              — FastAPI 入口、路由、数据库初始化
 ├── scheduler.py        — APScheduler 定时任务函数
 ├── danmaku.py          — 弹幕清理和 XML→ASS 转换

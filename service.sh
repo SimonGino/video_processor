@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Video Processor Service Management Script
+# Douyu-to-Bilibili Suite Service Management Script
 # 使用 uv 管理的 Python 项目服务脚本
 
 # 配置变量
-SERVICE_NAME="video_processor"
+SERVICE_NAME="douyu-to-bilibili-suite"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_MODULE="app:app"
 PID_FILE="$SCRIPT_DIR/${SERVICE_NAME}.pid"

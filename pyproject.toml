@@ -1,7 +1,7 @@
 [project]
-name = "video-processor"
+name = "douyu-to-bilibili-suite"
 version = "0.1.0"
-description = "Add your description here"
+description = "One-stop automated Douyu-to-Bilibili recording, danmaku processing, encoding, and upload suite"
 readme = "README.md"
 requires-python = ">=3.13.3"
 dependencies = [
