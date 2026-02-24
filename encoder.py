@@ -4,6 +4,7 @@ import subprocess
 import shlex
 import shutil
 import logging
+import sys
 
 import config
 
@@ -158,13 +159,13 @@ def encode_video():
         # Build FFmpeg command (using QSV acceleration)
         # Note: shlex.quote is used to safely handle filenames with special characters
         # Output to temp_mp4_file
-        cmd_str = (
+        qsv_cmd_str = (
             f'{config.FFMPEG_PATH} -v verbose '
             f'-init_hw_device qsv=hw '
             f'-hwaccel qsv '
             f'-hwaccel_output_format qsv '
             f'-i {shlex.quote(flv_file)} '
-            f'-vf "ass={shlex.quote(ass_file)},hwupload=extra_hw_frames=64" '
+            f'-vf "subtitles=filename={shlex.quote(ass_file)},hwupload=extra_hw_frames=64" '
             f'-c:v h264_qsv '
             f'-preset veryfast '
             f'-global_quality 32 ' # Lower number = higher quality, 25 is a good balance
@@ -173,12 +174,75 @@ def encode_video():
         )
 
         logging.info(f"开始压制: {os.path.basename(flv_file)} + {os.path.basename(ass_file)} -> {os.path.basename(temp_mp4_file)}")
-        logging.debug(f"执行 FFmpeg 命令: {cmd_str}")
+        logging.debug(f"执行 FFmpeg 命令: {qsv_cmd_str}")
+
+        # Fallback encoder for non-Linux environments (e.g. macOS)
+        fallback_cmds = []
+        if sys.platform == "darwin":
+            fallback_cmds.append(
+                (
+                    "videotoolbox",
+                    f'{config.FFMPEG_PATH} -v verbose '
+                    f'-i {shlex.quote(flv_file)} '
+                    f'-vf "subtitles=filename={shlex.quote(ass_file)}" '
+                    f'-c:v h264_videotoolbox '
+                    f'-b:v 6M '
+                    f'-maxrate 8M '
+                    f'-bufsize 12M '
+                    f'-c:a copy '
+                    f'-y {shlex.quote(temp_mp4_file)}'
+                )
+            )
+        fallback_cmds.append(
+            (
+                "libx264",
+                f'{config.FFMPEG_PATH} -v verbose '
+                f'-i {shlex.quote(flv_file)} '
+                f'-vf "subtitles=filename={shlex.quote(ass_file)}" '
+                f'-c:v libx264 '
+                f'-preset veryfast '
+                f'-crf 23 '
+                f'-c:a copy '
+                f'-y {shlex.quote(temp_mp4_file)}'
+            )
+        )
 
         try:
             # Safer approach: split command into list
-            cmd_list = shlex.split(cmd_str)
-            process = subprocess.run(cmd_list, check=True, capture_output=True, text=True, encoding='utf-8')
+            cmd_list = shlex.split(qsv_cmd_str)
+            try:
+                process = subprocess.run(cmd_list, check=True, capture_output=True, text=True, encoding='utf-8')
+            except subprocess.CalledProcessError as e:
+                stderr = (e.stderr or "").lower()
+                is_qsv_error = ("init_hw_device" in stderr) or ("device creation failed" in stderr) or ("qsv=hw" in stderr)
+                if not is_qsv_error:
+                    raise
+
+                logging.warning("QSV 不可用，尝试使用备用编码器压制（当前环境可能为 macOS 或无 Intel QSV）")
+                # Clean up possibly corrupted output before fallback
+                if os.path.exists(temp_mp4_file):
+                    try:
+                        os.remove(temp_mp4_file)
+                    except OSError:
+                        pass
+
+                last_exc: subprocess.CalledProcessError | None = None
+                for encoder_name, cmd_str in fallback_cmds:
+                    try:
+                        logging.info(f"使用备用编码器压制: {encoder_name}")
+                        cmd_list = shlex.split(cmd_str)
+                        process = subprocess.run(cmd_list, check=True, capture_output=True, text=True, encoding='utf-8')
+                        break
+                    except subprocess.CalledProcessError as e2:
+                        last_exc = e2
+                        logging.warning(f"备用编码器失败: {encoder_name} (code={e2.returncode})")
+                        if os.path.exists(temp_mp4_file):
+                            try:
+                                os.remove(temp_mp4_file)
+                            except OSError:
+                                pass
+                else:
+                    raise last_exc if last_exc else e
 
             logging.info(f"成功压制到临时文件: {os.path.basename(temp_mp4_file)}")
             logging.debug(f"FFmpeg stdout:\n{process.stdout}")
@@ -231,6 +295,12 @@ def encode_video():
             logging.error(f"FFmpeg return code: {e.returncode}")
             logging.error(f"FFmpeg stdout:\n{e.stdout}")
             logging.error(f"FFmpeg stderr:\n{e.stderr}")
+            stderr = e.stderr or ""
+            if ("No such filter" in stderr) and ("subtitles" in stderr or "ass" in stderr):
+                logging.error(
+                    "当前 FFmpeg 未启用 libass，无法 burn-in ASS 弹幕。macOS/Homebrew 建议安装 `ffmpeg-full`，"
+                    "并在 config.py 里把 `FFMPEG_PATH` 指向 `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`。"
+                )
             error_count += 1
              # If encoding fails, try to delete possibly corrupted temp MP4 file
             if os.path.exists(temp_mp4_file):

@@ -82,7 +82,7 @@ API_ENABLED = True
 # --- 主播配置 ---
 # 主播列表 (支持多主播监控)
 STREAMERS = [
-    {"name": "银剑君", "room_id": "251783"},
+    {"name": "洞主", "room_id": "138243"},
 ]
 # Backward compatibility
 DEFAULT_STREAMER_NAME = STREAMERS[0]["name"]
