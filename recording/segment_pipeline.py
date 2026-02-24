@@ -1,9 +1,13 @@
 import asyncio
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 
 from .danmaku_collector import DouyuDanmakuCollector
 from .ffmpeg_recorder import FfmpegRecorder
+
+
+logger = logging.getLogger("segment_pipeline")
 
 
 def _finalize_part_path(part_path: str | Path) -> Path:
@@ -49,7 +53,15 @@ async def run_one_segment(
         )
     )
 
-    rc, _ = await asyncio.gather(record_task, danmaku_task)
+    record_result, danmaku_result = await asyncio.gather(
+        record_task,
+        danmaku_task,
+        return_exceptions=True,
+    )
+    if isinstance(record_result, Exception):
+        raise record_result
+    if isinstance(danmaku_result, Exception):
+        logger.warning("Danmaku collection failed: %s", danmaku_result)
 
     flv_final = _finalize_part_path(flv_part)
     xml_final = _finalize_part_path(xml_part)
@@ -59,4 +71,4 @@ async def run_one_segment(
     if xml_part.exists():
         xml_part.replace(xml_final)
 
-    return int(rc)
+    return int(record_result)
