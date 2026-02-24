@@ -68,20 +68,23 @@ async def scheduled_video_pipeline():
         scheduler_logger.error(f"定时任务：同步处理任务执行过程中出错: {e}", exc_info=True)
 
     # --- 2. Async upload and BVID update tasks ---
-    async with AsyncSessionLocal() as db:
-        try:
-            if not load_yaml_config():
-                scheduler_logger.error("定时任务：无法加载 YAML 配置，跳过异步任务。")
-            else:
-                scheduler_logger.info("定时任务：执行 BVID 更新...")
-                await update_video_bvids(db)
-                scheduler_logger.info("定时任务：执行视频上传...")
-                await upload_to_bilibili(db)
-                scheduler_logger.info("定时任务：异步上传和BVID更新任务完成。")
-        except Exception as e:
-            scheduler_logger.error(f"定时任务：异步上传/BVID更新任务执行过程中出错: {e}", exc_info=True)
-        finally:
-            await db.close()
+    if not getattr(config, "SCHEDULED_UPLOAD_ENABLED", True):
+        scheduler_logger.info("定时任务：已禁用定时上传，跳过 BVID 更新和视频上传任务")
+    else:
+        async with AsyncSessionLocal() as db:
+            try:
+                if not load_yaml_config():
+                    scheduler_logger.error("定时任务：无法加载 YAML 配置，跳过异步任务。")
+                else:
+                    scheduler_logger.info("定时任务：执行 BVID 更新...")
+                    await update_video_bvids(db)
+                    scheduler_logger.info("定时任务：执行视频上传...")
+                    await upload_to_bilibili(db)
+                    scheduler_logger.info("定时任务：异步上传和BVID更新任务完成。")
+            except Exception as e:
+                scheduler_logger.error(f"定时任务：异步上传/BVID更新任务执行过程中出错: {e}", exc_info=True)
+            finally:
+                await db.close()
 
     end_time = time.time()
     scheduler_logger.info(f"定时任务：视频处理和上传流程执行完毕。总耗时: {end_time - start_time:.2f} 秒。")

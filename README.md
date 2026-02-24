@@ -109,6 +109,7 @@ uv run python recording_service.py
 | `STREAM_STATUS_CHECK_INTERVAL` | 直播状态检测间隔（分钟） | `10` |
 | `STREAM_START_TIME_ADJUSTMENT` | 开播时间向前调整（分钟） | `10` |
 | `DELETE_UPLOADED_FILES` | 上传后删除本地文件 | `True` |
+| `SCHEDULED_UPLOAD_ENABLED` | 是否启用定时任务中的 BVID 更新与上传（不影响手动 `/run_upload_tasks`） | `True` |
 | `PROCESS_AFTER_STREAM_END` | 仅下播后处理 | `False` |
 | `API_BASE_URL` | API 服务器地址 | `http://localhost:50009` |
 | `API_ENABLED` | 启用 API 功能 | `True` |
