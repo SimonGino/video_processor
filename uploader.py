@@ -220,6 +220,7 @@ async def upload_to_bilibili(db: AsyncSession):
     
     # 5. 根据直播场次将视频分组
     # 为每个场次创建时间范围
+    session_time_buffer = timedelta(minutes=config.STREAM_START_TIME_ADJUSTMENT)
     session_ranges = []
     for session in all_sessions:
         # 对于已结束的直播，使用实际的开始和结束时间
@@ -227,8 +228,8 @@ async def upload_to_bilibili(db: AsyncSession):
         end_time = session.end_time if session.end_time else datetime.now()
         
         session_ranges.append({
-            'start_time': session.start_time,
-            'end_time': end_time,
+            'start_time': session.start_time - session_time_buffer,
+            'end_time': end_time + session_time_buffer,
             'session_id': session.id,
             'is_current': session.end_time is None  # 标记是否为当前直播
         })
@@ -289,10 +290,10 @@ async def upload_to_bilibili(db: AsyncSession):
             logging.info(f"开始处理已结束的直播场次 ID:{session_id} ({formatted_date}) 的 {len(videos)} 个视频")
         
         # 获取该时间段的BVID（根据时间段查询）
-        period_start = session.start_time
-        period_end = session.end_time or datetime.now()
+        period_start = session.start_time - session_time_buffer
+        period_end = (session.end_time or datetime.now()) + session_time_buffer
         
-        logging.info(f"查询直播场次 ID:{session_id} 的时间范围: {period_start} 到 {period_end}")
+        logging.info(f"查询直播场次 ID:{session_id} 的时间范围(含buffer): {period_start} 到 {period_end}")
 
         # 查询数据库中该时间段上传的视频的BVID
         query = select(UploadedVideo).filter(
