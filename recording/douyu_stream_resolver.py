@@ -1,6 +1,5 @@
 import hashlib
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
@@ -8,13 +7,6 @@ import aiohttp
 
 def _md5(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
-
-
-@dataclass(frozen=True)
-class DouyuStreamUrl:
-    url: str
-    headers: dict[str, str]
-
 
 class DouyuH5PlayResolver:
     """Resolve Douyu live stream URL via getEncryption + getH5PlayV1."""
@@ -130,4 +122,3 @@ class DouyuH5PlayResolver:
             "Referer": "https://www.douyu.com",
             "Origin": "https://www.douyu.com",
         }
-
