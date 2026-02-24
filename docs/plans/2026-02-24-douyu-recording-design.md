@@ -295,5 +295,5 @@ tests/
 
 - 录制切片：60 分钟可配置（已确认）
 - 架构：独立 `recording_service` 进程（已确认）
-- URL：yt-dlp（已确认）
+- URL：斗鱼 `getEncryption + getH5PlayV1`（已确认）
 - 弹幕：aiohttp WS + STT（已确认）
