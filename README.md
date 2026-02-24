@@ -102,6 +102,10 @@ uv run python recording_service.py
 | `SC_FONT_SIZE` | ASS SC弹幕字体大小 | `38` |
 | `FFPROBE_PATH` | FFprobe 路径 | `ffprobe` |
 | `FFMPEG_PATH` | FFmpeg 路径 | `ffmpeg` |
+| `FFMPEG_QSV_INIT_DEVICE` | QSV 初始化 render 节点（留空=自动探测） | `""` |
+| `FFMPEG_QSV_LD_LIBRARY_PATH` | 运行 `ffmpeg` 时追加到 `LD_LIBRARY_PATH` 的目录（用于指定 libva/libmfx/libvpl 运行库） | `""` |
+| `FFMPEG_QSV_LIBVA_DRIVERS_PATH` | 运行 `ffmpeg` 时传给 `LIBVA_DRIVERS_PATH`（VA 驱动目录） | `""` |
+| `FFMPEG_QSV_LIBVA_DRIVER_NAME` | 运行 `ffmpeg` 时传给 `LIBVA_DRIVER_NAME`（如 `iHD`/`i965`） | `""` |
 | `SKIP_VIDEO_ENCODING` | 跳过压制直接上传 FLV | `False` |
 | `NO_DANMAKU_TITLE_SUFFIX` | 无弹幕版标题后缀 | `【无弹幕版】` |
 | `DANMAKU_TITLE_SUFFIX` | 弹幕版标题后缀 | `【弹幕版】` |
@@ -114,6 +118,108 @@ uv run python recording_service.py
 | `API_BASE_URL` | API 服务器地址 | `http://localhost:50009` |
 | `API_ENABLED` | 启用 API 功能 | `True` |
 | `STREAMERS` | 主播列表 `[{"name": "...", "room_id": "..."}]` | — |
+
+### Intel QSV / libva 兼容性（常见于 NAS、容器、定制系统）
+
+如果出现以下现象：
+
+- `vainfo` 可以正常识别 Intel GPU
+- 但 `ffmpeg -init_hw_device qsv=hw ...` 报错
+- 日志里出现 `has no function __vaDriverInit_1_0` 或 `Failed to initialise VAAPI connection`
+
+通常是 `ffmpeg` 使用的 `libva` 运行库版本，与实际加载的 `iHD_drv_video.so` 驱动版本不匹配。
+
+本项目已支持为 `ffmpeg` 子进程单独注入 QSV/libva 环境变量。可在 `config.py` 中配置：
+
+```python
+# 示例：某些系统将 Intel 媒体运行库放在 /usr/trim/lib/mediasrv
+FFMPEG_QSV_INIT_DEVICE = "/dev/dri/renderD128"
+FFMPEG_QSV_LD_LIBRARY_PATH = "/usr/trim/lib/mediasrv"
+FFMPEG_QSV_LIBVA_DRIVERS_PATH = "/usr/trim/lib/mediasrv/dri"
+FFMPEG_QSV_LIBVA_DRIVER_NAME = "iHD"
+```
+
+#### 如何找到“正确路径”（不要直接照抄示例）
+
+目标是让 `ffmpeg` 使用和 `vainfo` 一致的运行库/驱动组合。
+
+1. 先确认 QSV 基本条件满足（设备节点 + 编码器存在）
+
+```bash
+ls -l /dev/dri
+ffmpeg -hide_banner -encoders | grep qsv
+```
+
+2. 用 `vainfo` 找到“能正常工作的 VA 驱动文件路径”
+
+```bash
+vainfo --display drm --device /dev/dri/renderD128 2>&1 | tee /tmp/vainfo.log
+grep "Trying to open .*_drv_video.so" /tmp/vainfo.log
+```
+
+你会看到类似：
+
+```text
+libva info: Trying to open /path/to/.../dri/iHD_drv_video.so
+```
+
+此时：
+
+- `FFMPEG_QSV_LIBVA_DRIVERS_PATH` = 上面路径的目录（例如 `/path/to/.../dri`）
+- `FFMPEG_QSV_LIBVA_DRIVER_NAME` = 驱动名（通常是 `iHD`；如果日志显示 `i965_drv_video.so` 则填 `i965`）
+
+3. 比较 `vainfo` 和 `ffmpeg` 实际使用的运行库路径（`libva/libmfx/libvpl`）
+
+```bash
+ldd "$(which vainfo)" | egrep 'libva|mfx|vpl'
+ldd "$(which ffmpeg)" | egrep 'libva|mfx|vpl'
+```
+
+如果 `vainfo` 能工作，但 `ffmpeg` 指向了另一套系统库（常见现象），就需要把 `ffmpeg` 指向 `vainfo` 使用的那套运行库目录。
+
+此时：
+
+- `FFMPEG_QSV_LD_LIBRARY_PATH` = `vainfo` 输出里 `libva.so` / `libva-drm.so` / `libmfx.so` / `libvpl.so` 所在目录（通常是同一个目录）
+
+4. 填写 `config.py`（按你的实际路径替换）
+
+```python
+FFMPEG_QSV_INIT_DEVICE = "/dev/dri/renderD128"
+FFMPEG_QSV_LD_LIBRARY_PATH = "<vainfo 使用的 libva/libmfx/libvpl 所在目录>"
+FFMPEG_QSV_LIBVA_DRIVERS_PATH = "<vainfo 日志里 iHD_drv_video.so / i965_drv_video.so 所在目录>"
+FFMPEG_QSV_LIBVA_DRIVER_NAME = "iHD"  # 或 "i965"
+```
+
+5. 重启服务后验证（看日志）
+
+关键是 `ffmpeg` 日志里应显示它在加载你配置的驱动目录，例如：
+
+```text
+libva: Trying to open <你配置的目录>/iHD_drv_video.so
+```
+
+如果仍失败，优先检查：
+
+- `FFMPEG_QSV_LD_LIBRARY_PATH` 是否填成了“驱动目录”（这是错的；它应该是运行库目录）
+- `FFMPEG_QSV_LIBVA_DRIVERS_PATH` 是否填成了“运行库目录”（这也是错的；它应该是驱动目录）
+- `FFMPEG_QSV_LIBVA_DRIVER_NAME` 是否与驱动文件名匹配（`iHD` vs `i965`）
+
+常用检查命令：
+
+```bash
+ls -l /dev/dri
+ffmpeg -hide_banner -encoders | grep qsv
+vainfo --display drm --device /dev/dri/renderD128
+ldd "$(which ffmpeg)" | egrep 'libva|mfx|vpl'
+```
+
+说明：
+
+- `FFMPEG_QSV_INIT_DEVICE` 一般填写 `/dev/dri/renderD128`
+- `FFMPEG_QSV_LD_LIBRARY_PATH` 指向和 `vainfo` 成功时一致的运行库目录
+- `FFMPEG_QSV_LIBVA_DRIVERS_PATH` 指向包含 `iHD_drv_video.so` / `i965_drv_video.so` 的目录
+- `FFMPEG_QSV_LIBVA_DRIVER_NAME` 常见为 `iHD`（新驱动）或 `i965`（老驱动）
+- 修改 `config.py` 后需要重启服务进程
 
 ### config.yaml — B站投稿参数
 

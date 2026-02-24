@@ -30,6 +30,12 @@ SC_FONT_SIZE = 38
 FFPROBE_PATH = "ffprobe"
 # FFmpeg 可执行文件路径 (如果不在 PATH 中，请指定完整路径)
 FFMPEG_PATH = "ffmpeg"
+# QSV 初始化时使用的 render 节点（留空表示使用 ffmpeg 默认自动探测）
+FFMPEG_QSV_INIT_DEVICE = ""
+# QSV/VAAPI 运行库与驱动兼容性覆盖（留空表示不覆盖）
+FFMPEG_QSV_LD_LIBRARY_PATH = ""
+FFMPEG_QSV_LIBVA_DRIVERS_PATH = ""
+FFMPEG_QSV_LIBVA_DRIVER_NAME = ""
 
 # --- 视频处理配置 ---
 # 是否跳过视频压制步骤 (True: 跳过压制直接上传FLV, False: 压制为MP4后上传)

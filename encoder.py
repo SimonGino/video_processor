@@ -12,6 +12,35 @@ import config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
+def _build_ffmpeg_env():
+    """Build ffmpeg subprocess env overrides for QSV/libva compatibility."""
+    ld_library_path = (getattr(config, "FFMPEG_QSV_LD_LIBRARY_PATH", "") or "").strip()
+    libva_drivers_path = (getattr(config, "FFMPEG_QSV_LIBVA_DRIVERS_PATH", "") or "").strip()
+    libva_driver_name = (getattr(config, "FFMPEG_QSV_LIBVA_DRIVER_NAME", "") or "").strip()
+
+    if not (ld_library_path or libva_drivers_path or libva_driver_name):
+        return None
+
+    env = os.environ.copy()
+    if ld_library_path:
+        current = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = (
+            f"{ld_library_path}{os.pathsep}{current}" if current else ld_library_path
+        )
+    if libva_drivers_path:
+        env["LIBVA_DRIVERS_PATH"] = libva_drivers_path
+    if libva_driver_name:
+        env["LIBVA_DRIVER_NAME"] = libva_driver_name
+    return env
+
+
+def _qsv_init_hw_device():
+    device = (getattr(config, "FFMPEG_QSV_INIT_DEVICE", "") or "").strip()
+    if device:
+        return f"qsv=hw:{device}"
+    return "qsv=hw"
+
+
 def encode_video():
     """压制带有 ASS 弹幕的 FLV 视频为 MP4"""
     logging.info("开始处理视频文件...")
@@ -113,6 +142,7 @@ def encode_video():
     encoded_count = 0
     skipped_count = 0
     error_count = 0
+    ffmpeg_env = _build_ffmpeg_env()
 
     ass_files = glob.glob(os.path.join(config.PROCESSING_FOLDER, "*.ass"))
 
@@ -161,7 +191,7 @@ def encode_video():
         # Output to temp_mp4_file
         qsv_cmd_str = (
             f'{config.FFMPEG_PATH} -v verbose '
-            f'-init_hw_device qsv=hw '
+            f'-init_hw_device {_qsv_init_hw_device()} '
             f'-hwaccel qsv '
             f'-hwaccel_output_format qsv '
             f'-i {shlex.quote(flv_file)} '
@@ -176,7 +206,7 @@ def encode_video():
         logging.info(f"开始压制: {os.path.basename(flv_file)} + {os.path.basename(ass_file)} -> {os.path.basename(temp_mp4_file)}")
         logging.debug(f"执行 FFmpeg 命令: {qsv_cmd_str}")
 
-        # Fallback encoder for non-Linux environments (e.g. macOS)
+        # Hardware-only fallback encoders for environments where QSV is unavailable.
         fallback_cmds = []
         if sys.platform == "darwin":
             fallback_cmds.append(
@@ -193,32 +223,26 @@ def encode_video():
                     f'-y {shlex.quote(temp_mp4_file)}'
                 )
             )
-        fallback_cmds.append(
-            (
-                "libx264",
-                f'{config.FFMPEG_PATH} -v verbose '
-                f'-i {shlex.quote(flv_file)} '
-                f'-vf "subtitles=filename={shlex.quote(ass_file)}" '
-                f'-c:v libx264 '
-                f'-preset veryfast '
-                f'-crf 23 '
-                f'-c:a copy '
-                f'-y {shlex.quote(temp_mp4_file)}'
-            )
-        )
 
         try:
             # Safer approach: split command into list
             cmd_list = shlex.split(qsv_cmd_str)
             try:
-                process = subprocess.run(cmd_list, check=True, capture_output=True, text=True, encoding='utf-8')
+                process = subprocess.run(
+                    cmd_list,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    env=ffmpeg_env,
+                )
             except subprocess.CalledProcessError as e:
                 stderr = (e.stderr or "").lower()
                 is_qsv_error = ("init_hw_device" in stderr) or ("device creation failed" in stderr) or ("qsv=hw" in stderr)
                 if not is_qsv_error:
                     raise
 
-                logging.warning("QSV 不可用，尝试使用备用编码器压制（当前环境可能为 macOS 或无 Intel QSV）")
+                logging.warning("QSV 不可用，尝试使用备用硬件编码器压制（不使用 CPU 编码兜底）")
                 # Clean up possibly corrupted output before fallback
                 if os.path.exists(temp_mp4_file):
                     try:
@@ -226,12 +250,23 @@ def encode_video():
                     except OSError:
                         pass
 
+                if not fallback_cmds:
+                    logging.error("未找到可用的备用硬件编码器，已停止压制（已禁用 CPU/libx264 兜底）")
+                    raise e
+
                 last_exc: subprocess.CalledProcessError | None = None
                 for encoder_name, cmd_str in fallback_cmds:
                     try:
                         logging.info(f"使用备用编码器压制: {encoder_name}")
                         cmd_list = shlex.split(cmd_str)
-                        process = subprocess.run(cmd_list, check=True, capture_output=True, text=True, encoding='utf-8')
+                        process = subprocess.run(
+                            cmd_list,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            encoding='utf-8',
+                            env=ffmpeg_env,
+                        )
                         break
                     except subprocess.CalledProcessError as e2:
                         last_exc = e2
