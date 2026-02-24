@@ -26,23 +26,27 @@
 ### 2.2 非目标（后续迭代）
 
 - 弹幕渲染进画面（DanmakuRender 风格）
-- 自研斗鱼复杂签名/流地址解析算法（优先交给 yt-dlp 社区维护）
+- 自研斗鱼复杂 JS 签名算法（优先使用斗鱼 `getEncryption + getH5PlayV1` 的轻量方案）
 - 多平台统一录制框架（只做斗鱼）
 
 ## 3. 核心技术选择
 
-### 3.1 流 URL 获取：`yt-dlp --get-url`
+### 3.1 流 URL 获取：斗鱼 H5 播放接口（`getEncryption` + `getH5PlayV1`）
 
-原因：
+结论（基于本地实测）：`yt-dlp` 当前版本对斗鱼房间页无法稳定解析（报 “Unable to extract room id”），不适合作为 MVP 的唯一依赖。
 
-- 避免自研斗鱼签名/参数生成的高维护成本
-- yt-dlp 社区维护活跃，规则更新快
+推荐改用斗鱼自身的 H5 播放接口获取流地址：
 
-设计要求：
+1. `GET https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption?did=...` 获取加密材料（包含 `enc_data/rand_str/key/enc_time/is_special`）
+2. 按固定规则计算 `auth`（md5 迭代）
+3. `POST https://www.douyu.com/lapi/live/getH5PlayV1/{rid}`（注意是 **V1**）携带 `enc_data/tt/did/auth` 和常规参数（`cdn/rate/ver/...`）获取播放信息
+4. 从响应的 `rtmp_url + rtmp_live` 拼出最终 `*.flv?...` URL（若只有 HLS，则使用 `hls_url/hls_live`）
 
-- 支持多行 URL 输出：按优先级选择（优先 `flv`/RTMP，其次 HLS `m3u8`）
-- 对 yt-dlp 调用做超时控制与重试
-- 依赖新增：`yt-dlp`（作为 Python 依赖安装，或系统命令均可）
+优势：
+
+- 不依赖外部工具，减少运行时环境复杂度
+- 不需要 JS 引擎
+- 可控、可测（HTTP 响应可用 fixture/stub 覆盖）
 
 ### 3.2 录制：FFmpeg 子进程，`-c copy`
 
@@ -109,9 +113,10 @@ ffmpeg -hide_banner -y \
 - `recording/recording_service.py`
   - 主入口：读取 `config.STREAMERS`，为每个 streamer 启动一个录制协程
   - 负责整体生命周期（启动、停止、SIGTERM）
-- `recording/url_resolver.py`
-  - `YtDlpResolver`: `resolve(room_url) -> str`（选出一个可录制 URL）
-  - 处理多行输出、超时、重试、日志
+- `recording/douyu_stream_resolver.py`
+  - `DouyuH5PlayResolver`: `resolve_stream_url(room_id) -> str`
+  - 内部实现：`getEncryption`、`auth` 计算、`getH5PlayV1`
+  - 输出：优先 `flv_url`，fallback `hls_url`
 - `recording/ffmpeg_recorder.py`
   - `FfmpegRecorder`: `record(url, output_part_path, duration_seconds) -> exit_code`
   - 负责子进程启动/等待/超时/终止
@@ -132,7 +137,7 @@ ffmpeg -hide_banner -y \
 每个 streamer 一条状态机：
 
 1. `OFFLINE`：轮询 `StreamStatusMonitor.check_is_streaming()`
-2. `ONLINE_STARTING`：使用 yt-dlp 解析流 URL（失败重试）
+2. `ONLINE_STARTING`：调用 `DouyuH5PlayResolver` 获取流 URL（失败重试）
 3. `RECORDING_SEGMENT`：并行运行：
    - FFmpeg 录制到 `flv.part`（固定 60min 或配置）
    - WS 弹幕写到 `xml.part`（同一时间窗）
@@ -155,7 +160,9 @@ ffmpeg -hide_banner -y \
 - `RECORDING_ENABLED: bool = True`
 - `RECORDING_SEGMENT_MINUTES: int = 60`
 - `RECORDING_RETRY_DELAY_SECONDS: int = 10`
-- `YTDLP_PATH: str = "yt-dlp"`
+- `DOUYU_CDN: str = "hw-h5"`（可选，默认即可）
+- `DOUYU_RATE: int = 0`（可选，默认即可）
+- `DOUYU_DID: str = "10000000000000000000000000001501"`（可选，默认即可）
 - `DANMAKU_WS_URL: str = "wss://danmuproxy.douyu.com:8506/"`
 - `DANMAKU_HEARTBEAT_SECONDS: int = 30`
 - `DANMAKU_RECONNECT_DELAY_SECONDS: int = 5`
@@ -189,7 +196,7 @@ tests/
   fixtures/
 ```
 
-> 单元测试不依赖外网、不依赖 ffmpeg/yt-dlp；集成测试通过 stub 模拟子进程与 WS 服务。
+> 单元测试不依赖外网、不依赖 ffmpeg；集成测试通过 stub 模拟子进程与 WS/HTTP 服务。
 
 ### 10.2 阶段一：纯逻辑单元测试（unit）
 
@@ -238,13 +245,16 @@ tests/
 
 ### 10.4 阶段三：进程编排集成测试（integration）
 
-1) URL 解析器（yt-dlp stub）
+1) 斗鱼流 URL 解析器（HTTP stub）
 
-- 文件：`tests/integration/test_url_resolver_ytdlp_stub.py`
-- stub：`tests/bin/yt-dlp`（可执行脚本，输出固定 URL；或返回非 0）
-- 覆盖：
-  - 多行输出的选择逻辑
-  - 超时/非 0 返回码处理
+- 文件：`tests/integration/test_douyu_stream_resolver_http_stub.py`
+- 做法：
+  - stub `getEncryption` 与 `getH5PlayV1` 的 HTTP 响应（建议用本地 `aiohttp.web` server）
+  - 覆盖：
+    - `auth` 计算正确（给定固定 `rand_str/key/enc_time/is_special/ts`）
+    - `getH5PlayV1` 返回 FLV 时能拼出 `flv_url`
+    - 仅返回 HLS 时 fallback 到 `hls_url`
+    - 403/鉴权失败时的重试与失败路径
 
 2) FFmpeg 录制器（ffmpeg stub）
 
@@ -274,10 +284,10 @@ tests/
 
 ## 11. 风险与兜底
 
-- 部署网络/解析异常：在部分网络环境里，`www.douyu.com` 可能被 DNS 污染/拦截，或 TLS 握手被中间设备阻断，导致 `StreamStatusMonitor` 与 `yt-dlp` 无法访问斗鱼。兜底方案是：在部署机器上先做连通性自检（见 E2E），必要时使用可访问斗鱼的网络环境或配置代理/VPN。
-- yt-dlp 规则变化导致取流失败：快速升级依赖；必要时 fallback 到“手动提供流 URL”的配置项
+- 部署网络/解析异常：在部分网络环境里，`www.douyu.com` 可能被 DNS 污染/拦截，或 TLS 握手被中间设备阻断，导致斗鱼接口不可访问。兜底方案是：在部署机器上先做连通性自检（见 E2E），必要时使用可访问斗鱼的网络环境或配置代理/VPN。
+- 斗鱼接口参数/鉴权变化导致取流失败：快速调整 `douyu_stream_resolver` 的签名与请求参数；必要时 fallback 到“手动提供流 URL”的配置项
 - WS/STT 协议变更：通过 `stt_codec` 单点维护；单测/集成测能快速定位
-- 仅有 m3u8 无 flv：优先选择 flv；如只剩 m3u8，先记录日志并跳过（避免下游强依赖 `.flv` 破坏链路）
+- 仅有 m3u8 无 flv：fallback 使用 HLS URL 录制（FFmpeg 依然输出 `.flv`），并在日志中标记；若容器/编码不兼容导致 FFmpeg 失败，则终止本段并等待下一次重试
 
 ---
 
