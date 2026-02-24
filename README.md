@@ -3,13 +3,16 @@
 全自动处理直播录播文件并上传到哔哩哔哩的工具套件。
 
 - **直播状态监控** — 定时检测斗鱼主播上下线，记录直播场次
+- **内建录制（可选）** — FFmpeg 录制直播流为 FLV，同时采集弹幕 XML
 - **视频处理** — XML 弹幕转 ASS 字幕，FFmpeg QSV 硬件加速压制 MP4
 - **B站自动上传** — 按直播场次分组，智能创建稿件/追加分P，自动获取 BVID
 
 ## 架构
 
 ```
-外部录制软件 (FLV + XML)
+录制（二选一）
+- 内建录制服务 recording_service.py (FLV + XML)
+- 外部录制软件 (FLV + XML)
         ↓
 ┌─ PROCESSING_FOLDER ─────────────────────────┐
 │  cleanup_small_files()  删除 <10MB 文件      │  danmaku.py
@@ -35,7 +38,7 @@
 | uv | Python 包管理工具 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | FFmpeg (含 QSV) | 视频压制 | `apt install ffmpeg` 或从源码编译启用 QSV |
 | FFprobe | 获取视频分辨率 | 随 FFmpeg 一起安装 |
-| 外部录制工具 | 录制直播流为 FLV + XML | 如 StreamRecorder 等 |
+| 录制工具 | 录制直播流为 FLV + XML | 内建 `recording_service.py` 或外部工具（如 StreamRecorder） |
 
 Python 依赖（通过 `uv sync` 自动安装）：
 
@@ -69,6 +72,21 @@ bilitool login                    # 交互式登录
 # 5. 启动服务
 python app.py                     # 前台运行（开发）
 ./service.sh start                # 后台运行（生产）
+```
+
+## 内建录制服务（可选）
+
+前台运行：
+
+```bash
+uv run python recording_service.py
+```
+
+后台运行：
+
+```bash
+./service.sh start-recording
+./service.sh logs-recording 200
 ```
 
 ## 配置说明
