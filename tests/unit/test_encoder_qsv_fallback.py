@@ -27,7 +27,7 @@ def test_encode_video_fallback_when_qsv_init_fails(monkeypatch, tmp_path: Path):
 
     calls: list[list[str]] = []
 
-    def fake_run(cmd, check, capture_output, text, encoding, env=None):  # noqa: ANN001
+    def fake_run(cmd, check, capture_output, text, encoding, env=None, errors=None):  # noqa: ANN001
         calls.append(list(cmd))
         cmd_str = " ".join(cmd)
         if "-init_hw_device" in cmd_str and "qsv=hw" in cmd_str:
@@ -85,7 +85,7 @@ def test_encode_video_passes_qsv_runtime_env_and_device(monkeypatch, tmp_path: P
 
     captured: dict[str, object] = {}
 
-    def fake_run(cmd, check, capture_output, text, encoding, env):  # noqa: ANN001
+    def fake_run(cmd, check, capture_output, text, encoding, env, errors=None):  # noqa: ANN001
         captured["cmd"] = list(cmd)
         captured["env"] = dict(env or {})
         Path(cmd[-1]).write_bytes(b"fake-mp4")
@@ -102,3 +102,41 @@ def test_encode_video_passes_qsv_runtime_env_and_device(monkeypatch, tmp_path: P
     assert env["LIBVA_DRIVER_NAME"] == "iHD"
     assert env["LD_LIBRARY_PATH"] == "/usr/trim/lib/mediasrv:/existing/path"
     assert (upload / "b.mp4").exists()
+
+
+def test_encode_video_tolerates_non_utf8_ffmpeg_output(monkeypatch, tmp_path: Path):
+    import config
+    from encoder import encode_video
+
+    processing = tmp_path / "processing"
+    upload = tmp_path / "upload"
+    processing.mkdir()
+    upload.mkdir()
+
+    monkeypatch.setattr(config, "PROCESSING_FOLDER", str(processing))
+    monkeypatch.setattr(config, "UPLOAD_FOLDER", str(upload))
+    monkeypatch.setattr(config, "SKIP_VIDEO_ENCODING", False)
+    monkeypatch.setattr(config, "DELETE_UPLOADED_FILES", False)
+    monkeypatch.setattr(config, "FFMPEG_PATH", "ffmpeg")
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    flv = processing / "c.flv"
+    ass = processing / "c.ass"
+    flv.write_bytes(b"fake-flv")
+    ass.write_text("[Script Info]\nTitle: test\n", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, check, capture_output, text, encoding, env=None, errors=None):  # noqa: ANN001
+        captured["errors"] = errors
+        if errors != "replace":
+            raise UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte")
+        Path(cmd[-1]).write_bytes(b"fake-mp4")
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\ufffd", stderr="warn\ufffd")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    encode_video()
+
+    assert captured["errors"] == "replace"
+    assert (upload / "c.mp4").exists()

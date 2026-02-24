@@ -234,6 +234,7 @@ def encode_video():
                     capture_output=True,
                     text=True,
                     encoding='utf-8',
+                    errors='replace',
                     env=ffmpeg_env,
                 )
             except subprocess.CalledProcessError as e:
@@ -265,6 +266,7 @@ def encode_video():
                             capture_output=True,
                             text=True,
                             encoding='utf-8',
+                            errors='replace',
                             env=ffmpeg_env,
                         )
                         break
