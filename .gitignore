@@ -9,5 +9,6 @@ config.local.yaml
 logs/
 *.log
 __pycache__/
+tmp/
 src/__pycache__/
 src/video_processor/__pycache__/
