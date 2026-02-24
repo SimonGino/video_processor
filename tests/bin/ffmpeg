@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+import pathlib
+import sys
+
+
+def main() -> int:
+    out = sys.argv[-1]
+    path = pathlib.Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"stub-ffmpeg-output\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
