@@ -23,6 +23,7 @@ async def run_one_segment(
     duration_seconds: int,
     ffmpeg_path: str,
     ws_url: str,
+    danmaku_heartbeat_seconds: int = 30,
 ) -> int:
     flv_part = Path(flv_part_path)
     xml_part = Path(xml_part_path)
@@ -30,7 +31,7 @@ async def run_one_segment(
     xml_part.parent.mkdir(parents=True, exist_ok=True)
 
     recorder = FfmpegRecorder(ffmpeg_path=ffmpeg_path)
-    collector = DouyuDanmakuCollector(ws_url=ws_url)
+    collector = DouyuDanmakuCollector(ws_url=ws_url, heartbeat_seconds=danmaku_heartbeat_seconds)
 
     record_task = asyncio.create_task(
         recorder.record(

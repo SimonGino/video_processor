@@ -49,6 +49,23 @@ STREAM_STATUS_CHECK_INTERVAL = 10
 # 检测主播状态时，开播时间向前调整的时间量 (分钟)
 STREAM_START_TIME_ADJUSTMENT = 10
 
+# --- 录制配置 ---
+# 是否启用内建录制服务 (recording_service.py)
+RECORDING_ENABLED = True
+# 单段录制时长 (分钟)
+RECORDING_SEGMENT_MINUTES = 60
+# 录制失败/断流后的重试等待 (秒)
+RECORDING_RETRY_DELAY_SECONDS = 10
+
+# --- 斗鱼取流配置 ---
+DOUYU_CDN = "hw-h5"
+DOUYU_RATE = 0
+DOUYU_DID = "10000000000000000000000000001501"
+
+# --- 弹幕采集配置 ---
+DANMAKU_WS_URL = "wss://danmuproxy.douyu.com:8506/"
+DANMAKU_HEARTBEAT_SECONDS = 30
+
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
 DELETE_UPLOADED_FILES = True
