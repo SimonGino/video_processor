@@ -8,6 +8,7 @@ import aiohttp
 def _md5(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
 
+
 class DouyuH5PlayResolver:
     """Resolve Douyu live stream URL via getEncryption + getH5PlayV1."""
 
@@ -37,32 +38,40 @@ class DouyuH5PlayResolver:
 
     async def resolve_stream_url(self, room_id: str) -> tuple[str, dict[str, str]]:
         """Return (stream_url, headers) for ffmpeg."""
-        key_data = await self._ensure_key()
-        ts = int(time.time())
-        auth = self._sign(room_id=room_id, ts=ts, key_data=key_data)
-
-        params: dict[str, Any] = {
-            "cdn": self._cdn,
-            "rate": str(self._rate),
-            "ver": "219032101",
-            "iar": "0",
-            "ive": "0",
-            "rid": str(room_id),
-            "hevc": "0",
-            "fa": "0",
-            "sov": "0",
-            "enc_data": key_data["enc_data"],
-            "tt": str(ts),
-            "did": self._did,
-            "auth": auth,
-        }
-
-        url = f"{self._base_url}/lapi/live/getH5PlayV1/{room_id}"
         headers = self._request_headers()
-        async with aiohttp.ClientSession(timeout=self._timeout) as session:
-            async with session.post(url, params=params, data=params, headers=headers) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        data: dict[str, Any] | None = None
+        for attempt in range(2):
+            key_data = await self._ensure_key()
+            ts = int(time.time())
+            auth = self._sign(room_id=room_id, ts=ts, key_data=key_data)
+
+            params: dict[str, Any] = {
+                "cdn": self._cdn,
+                "rate": str(self._rate),
+                "ver": "219032101",
+                "iar": "0",
+                "ive": "0",
+                "rid": str(room_id),
+                "hevc": "0",
+                "fa": "0",
+                "sov": "0",
+                "enc_data": key_data["enc_data"],
+                "tt": str(ts),
+                "did": self._did,
+                "auth": auth,
+            }
+
+            try:
+                data = await self._get_h5play(room_id=room_id, params=params, headers=headers)
+                break
+            except aiohttp.ClientResponseError as e:
+                if e.status == 403 and attempt == 0:
+                    self._invalidate_key()
+                    continue
+                raise
+
+        if data is None:
+            raise RuntimeError("Douyu getH5PlayV1 returned no data")
 
         if not isinstance(data, dict) or data.get("error") != 0:
             raise RuntimeError(f"Douyu getH5PlayV1 failed: {data}")
@@ -101,8 +110,38 @@ class DouyuH5PlayResolver:
             raise RuntimeError(f"Douyu getEncryption invalid data: {data}")
 
         self._key_data = key_data
-        self._key_expire_at = now + 86400
+        self._key_expire_at = self._compute_key_expire_at(now=now, key_data=key_data)
         return key_data
+
+    async def _get_h5play(
+        self,
+        *,
+        room_id: str,
+        params: dict[str, Any],
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        url = f"{self._base_url}/lapi/live/getH5PlayV1/{room_id}"
+        async with aiohttp.ClientSession(timeout=self._timeout) as session:
+            async with session.post(url, params=params, data=params, headers=headers) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+
+    def _invalidate_key(self) -> None:
+        self._key_data = None
+        self._key_expire_at = 0
+
+    def _compute_key_expire_at(self, *, now: int, key_data: dict[str, Any]) -> int:
+        raw_expire_at = key_data.get("expire_at")
+        if raw_expire_at is not None:
+            try:
+                expire_at = int(raw_expire_at)
+            except (TypeError, ValueError):
+                expire_at = 0
+            if expire_at > 0:
+                # Refresh slightly ahead of server-side expiry to avoid segment-boundary 403s.
+                return max(0, expire_at - 5)
+        # Fallback to a short cache if the server payload format changes.
+        return now + 300
 
     def _sign(self, *, room_id: str, ts: int, key_data: dict[str, Any]) -> str:
         rand_str = str(key_data["rand_str"])
