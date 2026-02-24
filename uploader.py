@@ -1,7 +1,7 @@
+import asyncio
 import os
 import glob
 import subprocess
-import time
 import logging
 import yaml
 from datetime import datetime, timedelta
@@ -509,14 +509,17 @@ async def upload_to_bilibili(db: AsyncSession):
                     
                     # 等待获取BVID
                     logging.info("上传成功，等待15秒后尝试获取BVID...")
-                    time.sleep(15)
+                    await asyncio.sleep(15)
                     
                     # 从B站API获取BVID
                     acquired_bvid = None
                     for attempt in range(3):  # 尝试最多3次
                         try:
                             # 调用B站API获取视频列表
-                            video_list_data = feed_controller.get_video_dict_info(size=10, status_type='is_pubing')
+                            video_list_data = feed_controller.get_video_dict_info(
+                                size=20,
+                                status_type="pubed,is_pubing",
+                            )
                             
                             # 查找匹配标题的视频
                             if video_list_data and isinstance(video_list_data, dict):
@@ -535,11 +538,11 @@ async def upload_to_bilibili(db: AsyncSession):
                                 break  # 成功获取BVID，退出重试循环
                             else:
                                 logging.warning(f"第 {attempt+1} 次尝试未获取到BVID，{5} 秒后重试...")
-                                time.sleep(5)  # 等待5秒后重试
+                                await asyncio.sleep(5)  # 等待5秒后重试
                                 
                         except Exception as api_e:
                             logging.error(f"获取BVID时出错: {api_e}")
-                            time.sleep(5)  # 出错后等待5秒再重试
+                            await asyncio.sleep(5)  # 出错后等待5秒再重试
                     
                     # 如果获取不到BVID，则提示用户稍后再运行
                     if not acquired_bvid:

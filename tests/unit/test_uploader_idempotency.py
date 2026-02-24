@@ -54,8 +54,10 @@ async def test_pending_bvid_session_skips_new_upload(tmp_path: Path, monkeypatch
     monkeypatch.setattr(uploader, "UploadController", lambda: fake_uploader)
     monkeypatch.setattr(uploader, "FeedController", FakeFeedController)
 
-    # Avoid long waits in tests (implementation currently uses blocking sleep).
-    monkeypatch.setattr(uploader.time, "sleep", lambda *_a, **_k: None)
+    async def fake_sleep(_seconds: float):
+        return None
+
+    monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
 
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
@@ -136,7 +138,10 @@ async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path,
     monkeypatch.setattr(uploader, "UploadController", lambda: fake_uploader)
     monkeypatch.setattr(uploader, "FeedController", FakeFeedController)
 
-    monkeypatch.setattr(uploader.time, "sleep", lambda *_a, **_k: None)
+    async def fake_sleep(_seconds: float):
+        return None
+
+    monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
 
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
@@ -182,3 +187,83 @@ async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path,
     assert fake_uploader.append_calls[0]["bvid"] == "BV1TEST0000000000"
     assert fake_uploader.append_calls[0]["video_name"] is not None
     assert fake_uploader.append_calls[0]["video_name"].startswith("P4 ")
+
+
+@pytest.mark.asyncio
+async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path: Path, monkeypatch):
+    import uploader
+    import config as config_module
+
+    db_path = tmp_path / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    uploader.yaml_config = {
+        "title": "测试标题{time}",
+        "tid": 171,
+        "tag": "t1",
+        "source": "s",
+        "cover": "",
+        "dynamic": "",
+        "desc": "d",
+        "cdn": None,
+    }
+
+    class FakeLoginController:
+        def check_bilibili_login(self):
+            return True
+
+    class FakeUploadController:
+        def upload_video_entry(self, *args, **kwargs):
+            return True
+
+        def append_video_entry(self, *args, **kwargs):
+            return True
+
+    class FakeFeedController:
+        def __init__(self):
+            self.calls = []
+
+        def get_video_dict_info(self, size=20, status_type=""):
+            self.calls.append({"size": size, "status_type": status_type})
+            return {"测试标题2026年02月24日": "BV1TEST0000000000"}
+
+    feed = FakeFeedController()
+    monkeypatch.setattr(uploader, "LoginController", FakeLoginController)
+    monkeypatch.setattr(uploader, "UploadController", FakeUploadController)
+    monkeypatch.setattr(uploader, "FeedController", lambda: feed)
+
+    sleep_calls = []
+
+    async def fake_sleep(seconds: float):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
+
+    monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
+    monkeypatch.setattr(config_module, "API_ENABLED", True)
+    monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
+    monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
+    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
+
+    file_time = datetime(2026, 2, 24, 10, 0, 0)
+    video_path = tmp_path / f"洞主录播{file_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
+    video_path.write_text("x", encoding="utf-8")
+
+    session = StreamSession(
+        streamer_name="洞主",
+        start_time=file_time - timedelta(hours=1),
+        end_time=file_time + timedelta(hours=1),
+    )
+
+    async with session_local() as db:
+        db.add(session)
+        await db.commit()
+
+        await uploader.upload_to_bilibili(db)
+
+    assert feed.calls
+    assert "pubed" in feed.calls[0]["status_type"]
+    assert sleep_calls
