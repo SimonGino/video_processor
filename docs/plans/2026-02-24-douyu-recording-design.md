@@ -274,6 +274,7 @@ tests/
 
 ## 11. 风险与兜底
 
+- 部署网络/解析异常：在部分网络环境里，`www.douyu.com` 可能被 DNS 污染/拦截，或 TLS 握手被中间设备阻断，导致 `StreamStatusMonitor` 与 `yt-dlp` 无法访问斗鱼。兜底方案是：在部署机器上先做连通性自检（见 E2E），必要时使用可访问斗鱼的网络环境或配置代理/VPN。
 - yt-dlp 规则变化导致取流失败：快速升级依赖；必要时 fallback 到“手动提供流 URL”的配置项
 - WS/STT 协议变更：通过 `stt_codec` 单点维护；单测/集成测能快速定位
 - 仅有 m3u8 无 flv：优先选择 flv；如只剩 m3u8，先记录日志并跳过（避免下游强依赖 `.flv` 破坏链路）
@@ -286,4 +287,3 @@ tests/
 - 架构：独立 `recording_service` 进程（已确认）
 - URL：yt-dlp（已确认）
 - 弹幕：aiohttp WS + STT（已确认）
-
