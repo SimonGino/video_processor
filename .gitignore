@@ -10,5 +10,6 @@ logs/
 *.log
 __pycache__/
 tmp/
+data/
 src/__pycache__/
 src/video_processor/__pycache__/

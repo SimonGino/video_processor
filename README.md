@@ -95,8 +95,8 @@ uv run python recording_service.py
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `PROCESSING_FOLDER` | 录制文件处理目录 | `/vol2/1000/biliup` |
-| `UPLOAD_FOLDER` | 处理后视频存放目录 | `/vol2/1000/biliup/backup` |
+| `PROCESSING_FOLDER` | 录制文件处理目录 | `./data/processing` |
+| `UPLOAD_FOLDER` | 处理后视频存放目录 | `./data/upload` |
 | `MIN_FILE_SIZE_MB` | 最小有效文件大小 (MB) | `10` |
 | `FONT_SIZE` | ASS 弹幕字体大小 | `40` |
 | `SC_FONT_SIZE` | ASS SC弹幕字体大小 | `38` |

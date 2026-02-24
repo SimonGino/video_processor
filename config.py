@@ -4,10 +4,9 @@ import os
 # 获取项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# 使用绝对路径指定处理文件夹
-PROCESSING_FOLDER = "/vol2/1000/biliup"
-# 使用绝对路径指定上传文件夹
-UPLOAD_FOLDER = "/vol2/1000/biliup/backup"
+# Use project-local folders by default (kept out of git via .gitignore)
+PROCESSING_FOLDER = os.path.join(PROJECT_ROOT, "data", "processing")
+UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, "data", "upload")
 # Bilibili 配置文件路径
 YAML_CONFIG_PATH = "config.yaml"
 # Bilibili Cookies 文件路径
