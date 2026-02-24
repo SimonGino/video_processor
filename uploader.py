@@ -14,7 +14,7 @@ from bilitool import LoginController, UploadController, FeedController # 假设�
 
 # 导入数据库相关模块
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 
 from models import UploadedVideo, StreamSession # 需要导入模型
 
@@ -329,16 +329,13 @@ async def upload_to_bilibili(db: AsyncSession):
             logging.info(f"将以分P形式追加视频到 BVID: {bvid}")
             
             try:
-                # 查询该BVID已有多少分P，确定起始P号
-                # 这里简化处理，从数据库查询该BVID相关的文件数量
-                count_query = select(UploadedVideo).filter(
-                    UploadedVideo.bvid == bvid
+                # Determine next part number by counting uploaded records in this session window.
+                count_query = select(func.count()).select_from(UploadedVideo).filter(
+                    UploadedVideo.upload_time.between(period_start, period_end)
                 )
                 count_result = await db.execute(count_query)
-                existing_files = count_result.scalars().all()
-                
-                # 设置起始P号，如果无法确定就从P2开始
-                start_part_number = len(existing_files) + 1 if existing_files else 2
+                uploaded_in_period = count_result.scalar_one()
+                start_part_number = uploaded_in_period + 1
                 
                 # 获取CDN参数
                 cdn = yaml_config.get('cdn')
@@ -381,7 +378,8 @@ async def upload_to_bilibili(db: AsyncSession):
                     append_success = upload_controller.append_video_entry(
                         video_path=file_path,
                         bvid=bvid,
-                        cdn=cdn
+                        cdn=cdn,
+                        video_name=part_title,
                     )
                     
                     if append_success:
@@ -714,4 +712,3 @@ async def update_video_bvids(db: AsyncSession):
     
     except Exception as e:
         logging.error(f"更新视频BVID过程中发生错误: {e}")
-
