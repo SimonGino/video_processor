@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -51,11 +52,18 @@ class StreamStatusMonitor:
                     room_data = room_info['room']
                     return room_data.get('show_status') == 1 and room_data.get('videoLoop') == 0
 
+        except asyncio.TimeoutError:
+            # TimeoutError 的 str(e) 通常为空，单独处理避免空白日志。
+            logger.error(f"[{self.streamer_name}] Douyu API request timed out")
+            return None
         except aiohttp.ClientError as e:
             logger.error(f"[{self.streamer_name}] Douyu API request failed: {e}")
             return None
         except Exception as e:
-            logger.error(f"[{self.streamer_name}] Unexpected error checking stream status: {e}")
+            logger.error(
+                f"[{self.streamer_name}] Unexpected error checking stream status: "
+                f"{type(e).__name__}: {e}"
+            )
             return None
 
     async def initialize(self) -> None:

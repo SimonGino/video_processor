@@ -118,6 +118,42 @@ def test_biliup_append_video_entry_uses_vid_and_detects_modify_success(monkeypat
     assert str(video_path) == calls["cmd"][-1]
 
 
+def test_biliup_append_detects_rate_limit_21540(monkeypatch, tmp_path: Path):
+    import uploader
+
+    video_path = tmp_path / "video_p3.mp4"
+    video_path.write_bytes(b"x")
+
+    monkeypatch.setattr(
+        uploader,
+        "_get_biliup_runtime",
+        lambda: {
+            "bin": "/opt/biliup",
+            "cookies": "/opt/cookies.json",
+            "submit": "app",
+            "line": None,
+        },
+    )
+
+    def fake_run(_cmd):
+        return SimpleNamespace(
+            returncode=1,
+            stdout='Object {"code": Number(21540), "message": String("请求过于频繁，请稍后再试")}\n',
+            stderr='{"code":21540,"message":"请求过于频繁，请稍后再试","ttl":1}\n',
+        )
+
+    monkeypatch.setattr(uploader, "_run_biliup_cli_command", fake_run)
+
+    ok, rate_limited = uploader._biliup_append_video_entry_with_status(
+        video_path=str(video_path),
+        bvid="BV1y9fsBbEma",
+        part_title="P3 13:00:00",
+    )
+
+    assert ok is False
+    assert rate_limited is True
+
+
 @pytest.mark.asyncio
 async def test_upload_to_bilibili_with_biliup_cli_persists_bvid(tmp_path: Path, monkeypatch):
     import uploader
@@ -206,3 +242,119 @@ async def test_update_video_bvids_skips_when_biliup_cli_backend(monkeypatch):
     monkeypatch.setattr(uploader, "_detect_uploader_backend", lambda: "biliup_cli")
 
     await uploader.update_video_bvids(db=None)
+
+
+@pytest.mark.asyncio
+async def test_biliup_append_async_wrapper_uses_to_thread(monkeypatch):
+    import uploader
+
+    calls = {}
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls["func"] = func
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return (True, False)
+
+    monkeypatch.setattr(uploader.asyncio, "to_thread", fake_to_thread)
+
+    result = await uploader._biliup_append_video_entry_with_status_async(
+        video_path="/tmp/p.mp4",
+        bvid="BV1y9fsBbEma",
+        part_title="P1 00:00:00",
+    )
+
+    assert result == (True, False)
+    assert calls["func"] is uploader._biliup_append_video_entry_with_status
+    assert calls["kwargs"]["video_path"] == "/tmp/p.mp4"
+    assert calls["kwargs"]["bvid"] == "BV1y9fsBbEma"
+
+
+@pytest.mark.asyncio
+async def test_upload_to_bilibili_biliup_cli_cools_down_and_retries_on_21540(tmp_path: Path, monkeypatch):
+    import uploader
+    import config as config_module
+
+    db_path = tmp_path / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    uploader.yaml_config = {
+        "title": "测试标题{time}",
+        "tid": 171,
+        "tag": "t1",
+        "source": "",
+        "cover": "",
+        "dynamic": "",
+        "desc": "d",
+        "cdn": None,
+    }
+
+    monkeypatch.setattr(uploader, "_detect_uploader_backend", lambda: "biliup_cli")
+    monkeypatch.setattr(uploader, "_biliup_check_login_async", lambda: uploader.asyncio.sleep(0, result=True))
+
+    append_results = [(False, True), (True, False)]
+    append_calls = []
+
+    async def fake_append_async(**kwargs):
+        append_calls.append(kwargs)
+        return append_results.pop(0)
+
+    monkeypatch.setattr(uploader, "_biliup_append_video_entry_with_status_async", fake_append_async)
+
+    async def fake_upload_async(**kwargs):
+        raise AssertionError("create upload should not be called in this test")
+
+    monkeypatch.setattr(uploader, "_biliup_upload_video_entry_async", fake_upload_async)
+
+    sleep_calls = []
+
+    async def fake_sleep(seconds: float, result=None):
+        sleep_calls.append(seconds)
+        return result
+
+    monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
+
+    monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
+    monkeypatch.setattr(config_module, "API_ENABLED", False)
+    monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
+    monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
+    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
+    monkeypatch.setattr(config_module, "STREAM_START_TIME_ADJUSTMENT", 10)
+    monkeypatch.setattr(config_module, "BILIUP_RATE_LIMIT_COOLDOWN_SECONDS", 123)
+    monkeypatch.setattr(config_module, "BILIUP_RATE_LIMIT_APPEND_MAX_RETRIES", 1)
+
+    file_time = datetime(2026, 2, 24, 10, 0, 0)
+    video_path = tmp_path / f"洞主录播{file_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
+    video_path.write_text("x", encoding="utf-8")
+
+    session = StreamSession(
+        streamer_name="洞主",
+        start_time=file_time - timedelta(hours=1),
+        end_time=file_time + timedelta(hours=1),
+    )
+    existing = UploadedVideo(
+        bvid="BV1y9fsBbEma",
+        title="main",
+        first_part_filename="already.mp4",
+        upload_time=file_time - timedelta(minutes=10),
+    )
+
+    async with session_local() as db:
+        db.add_all([session, existing])
+        await db.commit()
+
+        await uploader.upload_to_bilibili(db)
+
+        result = await db.execute(
+            uploader.select(UploadedVideo).filter(
+                UploadedVideo.first_part_filename == video_path.name
+            )
+        )
+        inserted = result.scalars().first()
+
+    assert len(append_calls) == 2
+    assert 123 in sleep_calls
+    assert inserted is not None

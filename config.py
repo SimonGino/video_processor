@@ -88,6 +88,10 @@ BILIUP_COOKIES_PATH = ""
 BILIUP_SUBMIT_MODE = "app"
 # 可选上传线路（留空自动探测）
 BILIUP_LINE = ""
+# 命中B站频率限制(code 21540)后的冷却时间（秒）
+BILIUP_RATE_LIMIT_COOLDOWN_SECONDS = 300
+# 追加分P命中频率限制后，对当前文件的额外重试次数（每次重试前会冷却）
+BILIUP_RATE_LIMIT_APPEND_MAX_RETRIES = 1
 
 # --- 处理时机控制 ---
 # 是否仅在主播下播后处理视频 (True: 仅下播后处理, False: 按定时任务处理)

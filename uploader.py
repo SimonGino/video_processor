@@ -33,6 +33,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 yaml_config = {} # 用于存储从 config.yaml 读取的配置
 
 _BILIUP_BVID_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+_BILIUP_CODE_RE = re.compile(r'"code"\s*:\s*(?:Number\()?(\d+)\)?')
 
 
 def _project_root() -> str:
@@ -185,6 +186,23 @@ def _biliup_append_submit_succeeded(output: str, returncode: int) -> bool:
     )
 
 
+def _extract_biliup_error_code(output: str) -> Optional[int]:
+    match = _BILIUP_CODE_RE.search(output or "")
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _is_biliup_rate_limited(output: str, returncode: int) -> bool:
+    if returncode == 0:
+        return False
+    code = _extract_biliup_error_code(output)
+    return code == 21540
+
+
 def _normalize_tags(tag) -> str:
     if isinstance(tag, (list, tuple)):
         return ",".join(str(item) for item in tag if str(item).strip())
@@ -204,6 +222,10 @@ def _biliup_check_login() -> bool:
         "renew",
     ])
     return result.returncode == 0
+
+
+async def _biliup_check_login_async() -> bool:
+    return await asyncio.to_thread(_biliup_check_login)
 
 
 def _biliup_upload_video_entry(
@@ -242,11 +264,22 @@ def _biliup_upload_video_entry(
 
     result = _run_biliup_cli_command(cmd)
     output = f"{result.stdout or ''}\n{result.stderr or ''}"
+    if _is_biliup_rate_limited(output, result.returncode):
+        logging.warning("biliup 上传命中频率限制 (code 21540)")
     success = _biliup_create_submit_succeeded(output, result.returncode)
     return success, _extract_biliup_bvid(output)
 
 
-def _biliup_append_video_entry(*, video_path: str, bvid: str, part_title: Optional[str] = None) -> bool:
+async def _biliup_upload_video_entry_async(**kwargs) -> tuple[bool, Optional[str]]:
+    return await asyncio.to_thread(_biliup_upload_video_entry, **kwargs)
+
+
+def _biliup_append_video_entry_with_status(
+    *,
+    video_path: str,
+    bvid: str,
+    part_title: Optional[str] = None,
+) -> tuple[bool, bool]:
     runtime = _get_biliup_runtime()
     if part_title:
         logging.info("biliup append 当前版本未提供分P标题参数，将使用文件名作为分P标题")
@@ -264,7 +297,23 @@ def _biliup_append_video_entry(*, video_path: str, bvid: str, part_title: Option
 
     result = _run_biliup_cli_command(cmd)
     output = f"{result.stdout or ''}\n{result.stderr or ''}"
-    return _biliup_append_submit_succeeded(output, result.returncode)
+    rate_limited = _is_biliup_rate_limited(output, result.returncode)
+    if rate_limited:
+        logging.warning("biliup 追加分P命中频率限制 (code 21540)")
+    return _biliup_append_submit_succeeded(output, result.returncode), rate_limited
+
+
+async def _biliup_append_video_entry_with_status_async(**kwargs) -> tuple[bool, bool]:
+    return await asyncio.to_thread(_biliup_append_video_entry_with_status, **kwargs)
+
+
+def _biliup_append_video_entry(*, video_path: str, bvid: str, part_title: Optional[str] = None) -> bool:
+    success, _ = _biliup_append_video_entry_with_status(
+        video_path=video_path,
+        bvid=bvid,
+        part_title=part_title,
+    )
+    return success
 
 # 从文件名解析时间戳的函数
 def get_timestamp_from_filename(filepath):
@@ -354,13 +403,15 @@ async def upload_to_bilibili(db: AsyncSession):
     error_count = 0
     uploader_backend = _detect_uploader_backend()
     logging.info(f"B站上传后端: {uploader_backend}")
+    rate_limit_cooldown_seconds = max(0, int(getattr(config, "BILIUP_RATE_LIMIT_COOLDOWN_SECONDS", 300)))
+    append_rate_limit_max_retries = max(0, int(getattr(config, "BILIUP_RATE_LIMIT_APPEND_MAX_RETRIES", 1)))
     
     # 1. 检查登录状态
     upload_controller = None
     feed_controller = None
     try:
         if uploader_backend == "biliup_cli":
-            if not _biliup_check_login():
+            if not await _biliup_check_login_async():
                 logging.error("biliup 登录验证失败，请检查 cookies.json 文件是否有效。")
                 return
             logging.info("biliup 登录验证成功。")
@@ -523,6 +574,7 @@ async def upload_to_bilibili(db: AsyncSession):
     logging.info(f"视频已分组到 {len(session_videos)} 个直播场次，另有 {len(unassigned_videos)} 个视频无法分配")
     
     # 6. 处理每个时间段的视频上传
+    abort_due_to_rate_limit = False
     for session_id, session_data in session_videos.items():
         videos = session_data['videos']
         is_current_session = session_data['is_current']
@@ -631,20 +683,40 @@ async def upload_to_bilibili(db: AsyncSession):
                     
                     logging.info(f"准备追加分P ({part_title}): {file_name}")
                     
-                    # 调用追加接口
-                    if uploader_backend == "biliup_cli":
-                        append_success = _biliup_append_video_entry(
-                            video_path=file_path,
-                            bvid=bvid,
-                            part_title=part_title,
-                        )
-                    else:
-                        append_success = upload_controller.append_video_entry(
-                            video_path=file_path,
-                            bvid=bvid,
-                            cdn=cdn,
-                            video_name=part_title,
-                        )
+                    # 调用追加接口（命中频率限制时可冷却后重试当前文件）
+                    append_rate_limited = False
+                    append_retry_count = 0
+                    while True:
+                        if uploader_backend == "biliup_cli":
+                            append_success, append_rate_limited = await _biliup_append_video_entry_with_status_async(
+                                video_path=file_path,
+                                bvid=bvid,
+                                part_title=part_title,
+                            )
+                        else:
+                            append_rate_limited = False
+                            append_success = upload_controller.append_video_entry(
+                                video_path=file_path,
+                                bvid=bvid,
+                                cdn=cdn,
+                                video_name=part_title,
+                            )
+
+                        if append_success:
+                            break
+
+                        if append_rate_limited and append_retry_count < append_rate_limit_max_retries:
+                            append_retry_count += 1
+                            logging.warning(
+                                f"追加分P命中频率限制(code 21540)，"
+                                f"将在 {rate_limit_cooldown_seconds} 秒后重试当前文件 "
+                                f"(第 {append_retry_count}/{append_rate_limit_max_retries} 次重试): {file_name}"
+                            )
+                            if rate_limit_cooldown_seconds > 0:
+                                await asyncio.sleep(rate_limit_cooldown_seconds)
+                            continue
+
+                        break
                     
                     if append_success:
                         logging.info(f"成功追加分P: {file_name}")
@@ -675,8 +747,18 @@ async def upload_to_bilibili(db: AsyncSession):
                     else:
                         logging.error(f"追加分P失败: {file_name}")
                         error_count += 1
+                        if append_rate_limited:
+                            logging.warning(
+                                "命中B站频率限制(code 21540)且冷却重试已耗尽，"
+                                "本轮上传任务将提前结束，剩余文件等待下次定时任务重试"
+                            )
+                            abort_due_to_rate_limit = True
+                            break
                     
                     part_number += 1
+
+                if abort_due_to_rate_limit:
+                    break
             
             except Exception as e:
                 logging.error(f"处理直播场次 ID:{session_id} 的追加分P时出错: {e}")
@@ -734,7 +816,7 @@ async def upload_to_bilibili(db: AsyncSession):
             acquired_bvid = None
             if uploader_backend == "biliup_cli":
                 try:
-                    upload_result, acquired_bvid = _biliup_upload_video_entry(
+                    upload_result, acquired_bvid = await _biliup_upload_video_entry_async(
                         video_path=first_video_path,
                         tid=tid,
                         title=title,
@@ -855,6 +937,17 @@ async def upload_to_bilibili(db: AsyncSession):
             else:
                 logging.error(f"上传首个视频失败: {first_video_filename}")
                 error_count += 1
+
+        if abort_due_to_rate_limit:
+            break
+
+    if abort_due_to_rate_limit:
+        file_type = "FLV" if is_skip_encoding else "MP4"
+        logging.info(
+            f"Bilibili {file_type} 视频上传提前结束（触发频率限制）。共处理 {len(video_info_list)} 个文件，"
+            f"成功上传: {uploaded_count}，失败: {error_count}"
+        )
+        return
     
     # 处理未分配的视频
     if unassigned_videos and len(unassigned_videos) > 0:
