@@ -73,9 +73,9 @@ DANMAKU_HEARTBEAT_SECONDS = 30
 
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
-DELETE_UPLOADED_FILES = True
+DELETE_UPLOADED_FILES = False
 # 是否启用定时任务中的 BVID 更新与上传 (不影响手动 /run_upload_tasks)
-SCHEDULED_UPLOAD_ENABLED = False
+SCHEDULED_UPLOAD_ENABLED = True
 
 # --- 处理时机控制 ---
 # 是否仅在主播下播后处理视频 (True: 仅下播后处理, False: 按定时任务处理)

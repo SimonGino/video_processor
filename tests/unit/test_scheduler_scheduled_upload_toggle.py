@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 
@@ -100,3 +102,45 @@ async def test_manual_upload_task_still_runs_when_scheduled_upload_disabled(monk
     await scheduler_module.run_upload_async(fake_db)
 
     assert events == [("update_bvids", fake_db), ("upload", fake_db)]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_pipeline_handles_cancellation_during_sync_processing(monkeypatch):
+    import config as config_module
+    import scheduler as scheduler_module
+
+    events = []
+
+    class _CancelledLoop:
+        async def run_in_executor(self, _executor, func):
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(scheduler_module.asyncio, "get_running_loop", lambda: _CancelledLoop())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_get_app_deps",
+        lambda: (_FakeSessionFactory(_FakeDbSession()), None, {}),
+    )
+
+    monkeypatch.setattr(config_module, "PROCESS_AFTER_STREAM_END", False)
+    monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
+    monkeypatch.setattr(config_module, "SCHEDULED_UPLOAD_ENABLED", True, raising=False)
+
+    monkeypatch.setattr(scheduler_module, "cleanup_small_files", lambda: events.append("cleanup"))
+    monkeypatch.setattr(scheduler_module, "convert_danmaku", lambda: events.append("convert"))
+    monkeypatch.setattr(scheduler_module, "encode_video", lambda: events.append("encode"))
+
+    monkeypatch.setattr(scheduler_module, "load_yaml_config", lambda: events.append("load_yaml") or True)
+
+    async def fake_update_video_bvids(_db):
+        events.append("update_bvids")
+
+    async def fake_upload_to_bilibili(_db):
+        events.append("upload")
+
+    monkeypatch.setattr(scheduler_module, "update_video_bvids", fake_update_video_bvids)
+    monkeypatch.setattr(scheduler_module, "upload_to_bilibili", fake_upload_to_bilibili)
+
+    await scheduler_module.scheduled_video_pipeline()
+
+    assert events == []

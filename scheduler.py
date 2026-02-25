@@ -64,6 +64,9 @@ async def scheduled_video_pipeline():
         await loop.run_in_executor(None, encode_video)
 
         scheduler_logger.info("定时任务：同步处理任务完成。")
+    except asyncio.CancelledError:
+        scheduler_logger.info("定时任务：同步处理任务在应用关闭过程中被取消")
+        return
     except Exception as e:
         scheduler_logger.error(f"定时任务：同步处理任务执行过程中出错: {e}", exc_info=True)
 
@@ -81,6 +84,9 @@ async def scheduled_video_pipeline():
                     scheduler_logger.info("定时任务：执行视频上传...")
                     await upload_to_bilibili(db)
                     scheduler_logger.info("定时任务：异步上传和BVID更新任务完成。")
+            except asyncio.CancelledError:
+                scheduler_logger.info("定时任务：异步上传/BVID 更新任务在应用关闭过程中被取消")
+                return
             except Exception as e:
                 scheduler_logger.error(f"定时任务：异步上传/BVID更新任务执行过程中出错: {e}", exc_info=True)
             finally:
