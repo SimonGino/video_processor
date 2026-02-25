@@ -3,12 +3,20 @@ import os
 import glob
 import subprocess
 import logging
+import platform
+import re
+import shlex
+import shutil
 import yaml
 from datetime import datetime, timedelta
+from typing import Optional
 
 # 从同一目录导入配置和 Bilibili 工具
 import config
-from bilitool import LoginController, UploadController, FeedController # 假设需要这些
+try:
+    from bilitool import LoginController, UploadController, FeedController  # 假设需要这些
+except Exception:  # pragma: no cover - optional when using biliup CLI backend
+    LoginController = UploadController = FeedController = None
 
 # 导入 API 客户端
 
@@ -23,6 +31,240 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- 全局变量 --- 
 yaml_config = {} # 用于存储从 config.yaml 读取的配置
+
+_BILIUP_BVID_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+
+
+def _project_root() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _preferred_arch_tokens() -> list[str]:
+    machine = platform.machine().lower()
+    if machine in {"x86_64", "amd64"}:
+        return ["x86_64", "amd64"]
+    if machine in {"aarch64", "arm64"}:
+        return ["aarch64", "arm64"]
+    if machine.startswith("arm"):
+        return ["arm"]
+    return [machine]
+
+
+def _candidate_sort_key(path: str) -> tuple[int, int, str]:
+    lowered = path.lower()
+    arch_match = any(token in lowered for token in _preferred_arch_tokens())
+    # On Debian/glibc, prefer the non-musl binary first.
+    is_musl = "musl" in lowered
+    return (0 if arch_match else 1, 1 if is_musl else 0, lowered)
+
+
+def _resolve_biliup_bin_path() -> Optional[str]:
+    configured = str(getattr(config, "BILIUP_BIN_PATH", "") or "").strip()
+    if configured:
+        configured_path = os.path.expanduser(configured)
+        if not os.path.isabs(configured_path):
+            configured_path = os.path.join(_project_root(), configured_path)
+        if os.path.isfile(configured_path):
+            return configured_path
+        logging.warning(f"BILIUP_BIN_PATH 配置的文件不存在: {configured_path}，将尝试自动探测")
+
+    path_bin = shutil.which("biliup")
+    if path_bin:
+        return path_bin
+
+    repo_candidates = glob.glob(
+        os.path.join(_project_root(), "third-party", "**", "biliup"),
+        recursive=True,
+    )
+    repo_candidates = [p for p in repo_candidates if os.path.isfile(p)]
+    if not repo_candidates:
+        return None
+
+    repo_candidates.sort(key=_candidate_sort_key)
+    return repo_candidates[0]
+
+
+def _resolve_biliup_cookies_path(biliup_bin_path: str) -> Optional[str]:
+    configured = str(getattr(config, "BILIUP_COOKIES_PATH", "") or "").strip()
+    fallback = configured or str(getattr(config, "COOKIES_PATH", "cookies.json"))
+    cookie_path = os.path.expanduser(fallback)
+    if not os.path.isabs(cookie_path):
+        cookie_path = os.path.join(_project_root(), cookie_path)
+    if os.path.isfile(cookie_path):
+        return cookie_path
+
+    sibling_cookie = os.path.join(os.path.dirname(biliup_bin_path), "cookies.json")
+    if os.path.isfile(sibling_cookie):
+        return sibling_cookie
+
+    logging.warning(f"未找到 biliup cookies 文件，尝试路径: {cookie_path} / {sibling_cookie}")
+    return None
+
+
+def _get_biliup_runtime() -> dict[str, Optional[str]]:
+    biliup_bin = _resolve_biliup_bin_path()
+    if not biliup_bin:
+        raise RuntimeError("未找到 biliup 可执行文件，请配置 BILIUP_BIN_PATH 或将 biliup 加入 PATH")
+
+    cookies_path = _resolve_biliup_cookies_path(biliup_bin)
+    if not cookies_path:
+        raise RuntimeError("未找到 biliup 的 cookies.json，请配置 BILIUP_COOKIES_PATH")
+
+    submit_mode = str(getattr(config, "BILIUP_SUBMIT_MODE", "app") or "app").strip()
+    if submit_mode not in {"app", "b-cut-android"}:
+        logging.warning(f"BILIUP_SUBMIT_MODE={submit_mode} 不受支持，回退为 app")
+        submit_mode = "app"
+
+    line = str(getattr(config, "BILIUP_LINE", "") or "").strip() or None
+    return {
+        "bin": biliup_bin,
+        "cookies": cookies_path,
+        "submit": submit_mode,
+        "line": line,
+    }
+
+
+def _detect_uploader_backend() -> str:
+    configured = str(getattr(config, "BILIBILI_UPLOADER_BACKEND", "auto") or "auto").strip().lower()
+    if configured not in {"auto", "bilitool", "biliup_cli"}:
+        logging.warning(f"BILIBILI_UPLOADER_BACKEND={configured} 无效，回退为 auto")
+        configured = "auto"
+    if configured != "auto":
+        return configured
+
+    try:
+        _get_biliup_runtime()
+        return "biliup_cli"
+    except Exception:
+        return "bilitool"
+
+
+def _run_biliup_cli_command(cmd: list[str]):
+    logging.info(f"执行 biliup 命令: {' '.join(shlex.quote(part) for part in cmd)}")
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            logging.info(f"[biliup] {line}")
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            logging.warning(f"[biliup stderr] {line}")
+    if result.returncode != 0:
+        logging.error(f"biliup 命令执行失败，退出码: {result.returncode}")
+    return result
+
+
+def _extract_biliup_bvid(output: str) -> Optional[str]:
+    match = _BILIUP_BVID_RE.search(output or "")
+    return match.group(0) if match else None
+
+
+def _biliup_create_submit_succeeded(output: str, returncode: int) -> bool:
+    if returncode != 0:
+        return False
+    return (
+        "投稿成功" in output
+        or "APP接口投稿成功" in output
+        or '"code": Number(0)' in output
+        or "code: 0" in output
+    )
+
+
+def _biliup_append_submit_succeeded(output: str, returncode: int) -> bool:
+    if returncode != 0:
+        return False
+    return (
+        "稿件修改成功" in output
+        or "投稿成功" in output
+        or '"code": Number(0)' in output
+    )
+
+
+def _normalize_tags(tag) -> str:
+    if isinstance(tag, (list, tuple)):
+        return ",".join(str(item) for item in tag if str(item).strip())
+    return str(tag or "")
+
+
+def _biliup_check_login() -> bool:
+    try:
+        runtime = _get_biliup_runtime()
+    except Exception as e:
+        logging.error(f"初始化 biliup 运行环境失败: {e}")
+        return False
+
+    result = _run_biliup_cli_command([
+        runtime["bin"],
+        "-u", runtime["cookies"],
+        "renew",
+    ])
+    return result.returncode == 0
+
+
+def _biliup_upload_video_entry(
+    *,
+    video_path: str,
+    tid: int,
+    title: str,
+    desc: str,
+    tag,
+    source: str,
+    cover: str,
+    dynamic: str,
+    copyright: int = 2,
+) -> tuple[bool, Optional[str]]:
+    runtime = _get_biliup_runtime()
+    cmd = [
+        runtime["bin"],
+        "-u", runtime["cookies"],
+        "upload",
+        "--submit", runtime["submit"],
+        "--tid", str(tid),
+        "--title", str(title),
+        "--desc", str(desc or ""),
+        "--tag", _normalize_tags(tag),
+        "--copyright", str(copyright),
+    ]
+    if runtime.get("line"):
+        cmd.extend(["--line", str(runtime["line"])])
+    if source:
+        cmd.extend(["--source", str(source)])
+    if cover:
+        cmd.extend(["--cover", str(cover)])
+    if dynamic:
+        cmd.extend(["--dynamic", str(dynamic)])
+    cmd.append(video_path)
+
+    result = _run_biliup_cli_command(cmd)
+    output = f"{result.stdout or ''}\n{result.stderr or ''}"
+    success = _biliup_create_submit_succeeded(output, result.returncode)
+    return success, _extract_biliup_bvid(output)
+
+
+def _biliup_append_video_entry(*, video_path: str, bvid: str, part_title: Optional[str] = None) -> bool:
+    runtime = _get_biliup_runtime()
+    if part_title:
+        logging.info("biliup append 当前版本未提供分P标题参数，将使用文件名作为分P标题")
+
+    cmd = [
+        runtime["bin"],
+        "-u", runtime["cookies"],
+        "append",
+        "--submit", runtime["submit"],
+        "--vid", str(bvid),
+    ]
+    if runtime.get("line"):
+        cmd.extend(["--line", str(runtime["line"])])
+    cmd.append(video_path)
+
+    result = _run_biliup_cli_command(cmd)
+    output = f"{result.stdout or ''}\n{result.stderr or ''}"
+    return _biliup_append_submit_succeeded(output, result.returncode)
 
 # 从文件名解析时间戳的函数
 def get_timestamp_from_filename(filepath):
@@ -110,14 +352,27 @@ async def upload_to_bilibili(db: AsyncSession):
     logging.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
     uploaded_count = 0
     error_count = 0
+    uploader_backend = _detect_uploader_backend()
+    logging.info(f"B站上传后端: {uploader_backend}")
     
     # 1. 检查登录状态
+    upload_controller = None
+    feed_controller = None
     try:
-        login_controller = LoginController() 
-        if not login_controller.check_bilibili_login():
-            logging.error("Bilibili 登录验证失败，请检查 cookies.json 文件是否有效或已生成。")
-            return
-        logging.info("Bilibili 登录验证成功。")
+        if uploader_backend == "biliup_cli":
+            if not _biliup_check_login():
+                logging.error("biliup 登录验证失败，请检查 cookies.json 文件是否有效。")
+                return
+            logging.info("biliup 登录验证成功。")
+        else:
+            if LoginController is None:
+                logging.error("未安装 bilitool，且当前上传后端配置为 bilitool")
+                return
+            login_controller = LoginController()
+            if not login_controller.check_bilibili_login():
+                logging.error("Bilibili 登录验证失败，请检查 cookies.json 文件是否有效或已生成。")
+                return
+            logging.info("Bilibili 登录验证成功。")
     except Exception as e:
         logging.error(f"检查 Bilibili 登录状态时出错: {e}")
         return
@@ -126,8 +381,9 @@ async def upload_to_bilibili(db: AsyncSession):
         logging.error("API 功能未配置或明确禁用，无法执行上传")
         return
     
-    upload_controller = UploadController()
-    feed_controller = FeedController()
+    if uploader_backend == "bilitool":
+        upload_controller = UploadController()
+        feed_controller = FeedController()
     
     # 2. 获取所有待上传的视频文件并按时间戳排序
     video_files = glob.glob(os.path.join(config.UPLOAD_FOLDER, f"*.{video_extension}"))
@@ -376,12 +632,19 @@ async def upload_to_bilibili(db: AsyncSession):
                     logging.info(f"准备追加分P ({part_title}): {file_name}")
                     
                     # 调用追加接口
-                    append_success = upload_controller.append_video_entry(
-                        video_path=file_path,
-                        bvid=bvid,
-                        cdn=cdn,
-                        video_name=part_title,
-                    )
+                    if uploader_backend == "biliup_cli":
+                        append_success = _biliup_append_video_entry(
+                            video_path=file_path,
+                            bvid=bvid,
+                            part_title=part_title,
+                        )
+                    else:
+                        append_success = upload_controller.append_video_entry(
+                            video_path=file_path,
+                            bvid=bvid,
+                            cdn=cdn,
+                            video_name=part_title,
+                        )
                     
                     if append_success:
                         logging.info(f"成功追加分P: {file_name}")
@@ -468,28 +731,46 @@ async def upload_to_bilibili(db: AsyncSession):
             logging.info(f"上传首个视频，创建稿件。标题: {title}")
             
             # 调用上传接口
-            upload_result = upload_controller.upload_video_entry(
-                video_path=first_video_path,
-                yaml=None,
-                tid=tid,
-                title=title,
-                copyright=2,
-                desc=video_desc,
-                tag=tag,
-                source=source,
-                cover=cover,
-                dynamic=dynamic,
-                cdn=cdn
-            )
+            acquired_bvid = None
+            if uploader_backend == "biliup_cli":
+                try:
+                    upload_result, acquired_bvid = _biliup_upload_video_entry(
+                        video_path=first_video_path,
+                        tid=tid,
+                        title=title,
+                        copyright=2,
+                        desc=video_desc,
+                        tag=tag,
+                        source=source,
+                        cover=cover,
+                        dynamic=dynamic,
+                    )
+                except Exception as cli_e:
+                    logging.error(f"调用 biliup 上传失败: {cli_e}")
+                    upload_result = False
+            else:
+                upload_result = upload_controller.upload_video_entry(
+                    video_path=first_video_path,
+                    yaml=None,
+                    tid=tid,
+                    title=title,
+                    copyright=2,
+                    desc=video_desc,
+                    tag=tag,
+                    source=source,
+                    cover=cover,
+                    dynamic=dynamic,
+                    cdn=cdn
+                )
             
             if upload_result:
                 logging.info(f"成功上传首个视频: {first_video_filename}")
                 uploaded_count += 1
                 
-                # 先将无BVID的记录存入数据库
+                # 记录到数据库（biliup 可直接返回 BVID；bilitool 先置空后回填）
                 try:
                     new_upload = UploadedVideo(
-                        bvid=None,  # 先设为None
+                        bvid=acquired_bvid,
                         title=title,
                         first_part_filename=first_video_filename,
                         upload_time=first_video_info['timestamp']  # 设置录制时间
@@ -498,7 +779,10 @@ async def upload_to_bilibili(db: AsyncSession):
                     await db.commit()
                     await db.refresh(new_upload)
                     record_id = new_upload.id
-                    logging.info(f"已将视频信息记录到数据库 (ID: {record_id}, 标题: {title}, 暂无BVID)")
+                    logging.info(
+                        f"已将视频信息记录到数据库 (ID: {record_id}, 标题: {title}, "
+                        f"BVID: {acquired_bvid or '暂无'})"
+                    )
                     
                     # 处理文件
                     if config.DELETE_UPLOADED_FILES:
@@ -508,54 +792,62 @@ async def upload_to_bilibili(db: AsyncSession):
                         except OSError as e:
                             logging.warning(f"删除已上传视频失败: {e}")
                     
-                    # 等待获取BVID
-                    logging.info("上传成功，等待15秒后尝试获取BVID...")
-                    await asyncio.sleep(15)
-                    
-                    # 从B站API获取BVID
-                    acquired_bvid = None
-                    for attempt in range(3):  # 尝试最多3次
-                        try:
-                            # 调用B站API获取视频列表
-                            video_list_data = feed_controller.get_video_dict_info(
-                                size=20,
-                                status_type="pubed,is_pubing",
-                            )
-                            
-                            # 查找匹配标题的视频
-                            if video_list_data and isinstance(video_list_data, dict):
-                                for video_title, video_bvid in video_list_data.items():
-                                    if video_title == title and isinstance(video_bvid, str) and video_bvid.startswith('BV'):
-                                        acquired_bvid = video_bvid
-                                        logging.info(f"成功获取BVID: {acquired_bvid}")
-                                        break
-                            
-                            # 如果在分P视频中找到了BVID，则更新数据库
-                            if acquired_bvid:
-                                # 更新数据库中的BVID
-                                new_upload.bvid = acquired_bvid
-                                await db.commit()
-                                logging.info(f"已更新数据库记录 ID:{record_id} 的BVID为 {acquired_bvid}")
-                                break  # 成功获取BVID，退出重试循环
-                            else:
-                                logging.warning(f"第 {attempt+1} 次尝试未获取到BVID，{5} 秒后重试...")
-                                await asyncio.sleep(5)  # 等待5秒后重试
+                    if uploader_backend == "bilitool":
+                        # 等待获取BVID
+                        logging.info("上传成功，等待15秒后尝试获取BVID...")
+                        await asyncio.sleep(15)
+                        
+                        # 从B站API获取BVID
+                        acquired_bvid = None
+                        for attempt in range(3):  # 尝试最多3次
+                            try:
+                                # 调用B站API获取视频列表
+                                video_list_data = feed_controller.get_video_dict_info(
+                                    size=20,
+                                    status_type="pubed,is_pubing",
+                                )
                                 
-                        except Exception as api_e:
-                            logging.error(f"获取BVID时出错: {api_e}")
-                            await asyncio.sleep(5)  # 出错后等待5秒再重试
-                    
-                    # 如果获取不到BVID，则提示用户稍后再运行
-                    if not acquired_bvid:
-                        logging.warning("无法获取BVID，请等待B站处理完成后再运行程序，追加分P")
-                        # 此时数据库记录中的BVID仍为None，下次运行时会尝试更新
-                        continue # 结束本场次处理，不追加分P
-                    
-                    # 如果获取到BVID且该场次有多个视频，则继续追加
-                    # 因为已经花费了时间等待BVID，为确保上传完整性，本次就不继续上传分P
-                    # 下次程序运行时会使用已保存的BVID继续追加其他分P
-                    if len(videos) > 1:
-                        logging.info(f"已获取BVID: {acquired_bvid}，但为确保稳定性，将在下次运行时追加剩余的 {len(videos)-1} 个分P")
+                                # 查找匹配标题的视频
+                                if video_list_data and isinstance(video_list_data, dict):
+                                    for video_title, video_bvid in video_list_data.items():
+                                        if video_title == title and isinstance(video_bvid, str) and video_bvid.startswith('BV'):
+                                            acquired_bvid = video_bvid
+                                            logging.info(f"成功获取BVID: {acquired_bvid}")
+                                            break
+                                
+                                # 如果在分P视频中找到了BVID，则更新数据库
+                                if acquired_bvid:
+                                    # 更新数据库中的BVID
+                                    new_upload.bvid = acquired_bvid
+                                    await db.commit()
+                                    logging.info(f"已更新数据库记录 ID:{record_id} 的BVID为 {acquired_bvid}")
+                                    break  # 成功获取BVID，退出重试循环
+                                else:
+                                    logging.warning(f"第 {attempt+1} 次尝试未获取到BVID，{5} 秒后重试...")
+                                    await asyncio.sleep(5)  # 等待5秒后重试
+                                    
+                            except Exception as api_e:
+                                logging.error(f"获取BVID时出错: {api_e}")
+                                await asyncio.sleep(5)  # 出错后等待5秒再重试
+                        
+                        # 如果获取不到BVID，则提示用户稍后再运行
+                        if not acquired_bvid:
+                            logging.warning("无法获取BVID，请等待B站处理完成后再运行程序，追加分P")
+                            # 此时数据库记录中的BVID仍为None，下次运行时会尝试更新
+                            continue # 结束本场次处理，不追加分P
+                        
+                        # 如果获取到BVID且该场次有多个视频，则继续追加
+                        # 因为已经花费了时间等待BVID，为确保上传完整性，本次就不继续上传分P
+                        # 下次程序运行时会使用已保存的BVID继续追加其他分P
+                        if len(videos) > 1:
+                            logging.info(f"已获取BVID: {acquired_bvid}，但为确保稳定性，将在下次运行时追加剩余的 {len(videos)-1} 个分P")
+                    else:
+                        if acquired_bvid:
+                            logging.info(f"biliup 已直接返回 BVID: {acquired_bvid}")
+                            if len(videos) > 1:
+                                logging.info(f"已获取BVID: {acquired_bvid}，下次运行时将继续追加剩余的 {len(videos)-1} 个分P")
+                        else:
+                            logging.warning("biliup 上传成功但未解析到BVID，本次仅记录首个视频；请稍后人工确认稿件后再继续追加分P")
                 
                 except Exception as db_e:
                     logging.error(f"将视频信息记录到数据库或获取BVID时出错: {db_e}")
@@ -622,9 +914,15 @@ async def upload_to_bilibili(db: AsyncSession):
 async def update_video_bvids(db: AsyncSession):
     """检查并更新数据库中缺失BVID的视频记录 (直接操作数据库)"""
     logging.info("开始检查和更新缺失BVID的视频记录...")
+    if _detect_uploader_backend() == "biliup_cli":
+        logging.info("当前使用 biliup CLI 上传后端（创建稿件时通常可直接拿到BVID），跳过旧 API 回填任务")
+        return
     
     try:
         # 1. 检查登录状态，确保能调用B站API
+        if LoginController is None or FeedController is None:
+            logging.error("未安装 bilitool，无法执行旧 API 的 BVID 回填")
+            return
         login_controller = LoginController()
         if not login_controller.check_bilibili_login():
             logging.error("Bilibili 登录验证失败，无法更新BVID信息")
