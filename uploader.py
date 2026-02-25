@@ -377,7 +377,7 @@ async def upload_to_bilibili(db: AsyncSession):
         logging.error(f"检查 Bilibili 登录状态时出错: {e}")
         return
     
-    if not config.API_ENABLED:
+    if uploader_backend != "biliup_cli" and not config.API_ENABLED:
         logging.error("API 功能未配置或明确禁用，无法执行上传")
         return
     
