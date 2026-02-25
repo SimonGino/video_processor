@@ -358,3 +358,64 @@ async def test_upload_to_bilibili_biliup_cli_cools_down_and_retries_on_21540(tmp
     assert len(append_calls) == 2
     assert 123 in sleep_calls
     assert inserted is not None
+
+
+def test_handle_uploaded_file_after_success_defers_delete_when_delay_enabled(tmp_path: Path, monkeypatch):
+    import uploader
+    import config as config_module
+
+    file_path = tmp_path / "video.mp4"
+    file_path.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", True)
+    monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES_DELAY_HOURS", 24)
+
+    uploader._handle_uploaded_file_after_success(str(file_path), file_path.name)
+
+    assert file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_delayed_uploaded_files_deletes_only_expired_records(tmp_path: Path, monkeypatch):
+    import uploader
+    import config as config_module
+
+    db_path = tmp_path / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", True)
+    monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES_DELAY_HOURS", 1)
+    monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
+
+    old_file = tmp_path / "old.mp4"
+    new_file = tmp_path / "new.mp4"
+    old_file.write_text("old", encoding="utf-8")
+    new_file.write_text("new", encoding="utf-8")
+
+    now = datetime.now()
+    old_record = UploadedVideo(
+        bvid="BV1OLD0000000A",
+        title="old",
+        first_part_filename="old.mp4",
+        upload_time=now - timedelta(hours=3),
+        created_at=now - timedelta(hours=2),
+    )
+    new_record = UploadedVideo(
+        bvid="BV1NEW0000000B",
+        title="new",
+        first_part_filename="new.mp4",
+        upload_time=now - timedelta(minutes=10),
+        created_at=now - timedelta(minutes=10),
+    )
+
+    async with session_local() as db:
+        db.add_all([old_record, new_record])
+        await db.commit()
+
+        await uploader.cleanup_delayed_uploaded_files(db)
+
+    assert not old_file.exists()
+    assert new_file.exists()

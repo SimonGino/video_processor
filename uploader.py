@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover - optional when using biliup CLI backend
 
 # 导入数据库相关模块
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, and_, or_
 
 from models import UploadedVideo, StreamSession # 需要导入模型
 
@@ -209,6 +209,87 @@ def _normalize_tags(tag) -> str:
     return str(tag or "")
 
 
+def _get_uploaded_file_delete_delay_hours() -> int:
+    try:
+        return max(0, int(getattr(config, "DELETE_UPLOADED_FILES_DELAY_HOURS", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _handle_uploaded_file_after_success(file_path: str, file_name: str) -> None:
+    """Delete uploaded file immediately or keep it for delayed cleanup."""
+    if not getattr(config, "DELETE_UPLOADED_FILES", False):
+        return
+
+    delay_hours = _get_uploaded_file_delete_delay_hours()
+    if delay_hours > 0:
+        logging.info(
+            f"已启用延时删除({delay_hours}小时)，暂不删除已上传视频: {file_name}"
+        )
+        return
+
+    try:
+        os.remove(file_path)
+        logging.info(f"已删除已上传的视频: {file_name}")
+    except OSError as e:
+        logging.warning(f"删除已上传视频失败: {e}")
+
+
+async def cleanup_delayed_uploaded_files(db: AsyncSession) -> None:
+    """Delete locally uploaded files after a configured retention delay."""
+    if not getattr(config, "DELETE_UPLOADED_FILES", False):
+        return
+
+    delay_hours = _get_uploaded_file_delete_delay_hours()
+    if delay_hours <= 0:
+        return
+
+    cutoff = datetime.now() - timedelta(hours=delay_hours)
+    upload_dir = getattr(config, "UPLOAD_FOLDER", "")
+    if not upload_dir:
+        return
+
+    logging.info(
+        f"开始清理延时删除到期文件（保留期: {delay_hours} 小时，截止时间: {cutoff.strftime('%Y-%m-%d %H:%M:%S')}）"
+    )
+
+    try:
+        query = select(UploadedVideo).filter(
+            or_(
+                and_(
+                    UploadedVideo.created_at.is_not(None),
+                    UploadedVideo.created_at < cutoff,
+                ),
+                and_(
+                    UploadedVideo.created_at.is_(None),
+                    UploadedVideo.upload_time.is_not(None),
+                    UploadedVideo.upload_time < cutoff,
+                ),
+            )
+        ).order_by(UploadedVideo.created_at)
+        result = await db.execute(query)
+        candidates = result.scalars().all()
+
+        deleted_count = 0
+        for record in candidates:
+            file_name = record.first_part_filename
+            if not file_name:
+                continue
+            file_path = os.path.join(upload_dir, file_name)
+            if not os.path.isfile(file_path):
+                continue
+            try:
+                os.remove(file_path)
+                deleted_count += 1
+                logging.info(f"延时删除已上传视频成功: {file_name}")
+            except OSError as e:
+                logging.warning(f"延时删除已上传视频失败 {file_name}: {e}")
+
+        logging.info(f"延时删除清理完成，共删除 {deleted_count} 个文件")
+    except Exception as e:
+        logging.error(f"执行延时删除清理时出错: {e}")
+
+
 def _biliup_check_login() -> bool:
     try:
         runtime = _get_biliup_runtime()
@@ -382,6 +463,9 @@ async def upload_to_bilibili(db: AsyncSession):
        - 获取到BVID后，才能对该时间段的其他视频使用append_video_entry追加分P
     5. 如果无法获取BVID，该时间段所有视频暂不上传，等待下次运行
     """
+    # 先执行一次延时删除清理（如果启用），即使本轮没有新视频或上传配置异常也能逐步释放空间。
+    await cleanup_delayed_uploaded_files(db)
+
     global yaml_config
     if not yaml_config:
         logging.error("Bilibili 上传配置 (config.yaml) 未成功加载，跳过上传步骤。")
@@ -734,13 +818,8 @@ async def upload_to_bilibili(db: AsyncSession):
                             await db.commit()
                             logging.info(f"已将分P信息记录到数据库 (文件: {file_name}, BVID: {bvid})")
                             
-                            # 处理文件
-                            if config.DELETE_UPLOADED_FILES:
-                                try:
-                                    os.remove(file_path)
-                                    logging.info(f"已删除已上传的视频: {file_name}")
-                                except OSError as e:
-                                    logging.warning(f"删除已上传视频失败: {e}")
+                            # 处理文件（立即删除或延时删除）
+                            _handle_uploaded_file_after_success(file_path, file_name)
                         except Exception as db_e:
                             logging.error(f"将视频分P信息记录到数据库时出错: {db_e}")
                             await db.rollback()
@@ -866,13 +945,8 @@ async def upload_to_bilibili(db: AsyncSession):
                         f"BVID: {acquired_bvid or '暂无'})"
                     )
                     
-                    # 处理文件
-                    if config.DELETE_UPLOADED_FILES:
-                        try:
-                            os.remove(first_video_path)
-                            logging.info(f"已删除已上传的视频: {first_video_filename}")
-                        except OSError as e:
-                            logging.warning(f"删除已上传视频失败: {e}")
+                    # 处理文件（立即删除或延时删除）
+                    _handle_uploaded_file_after_success(first_video_path, first_video_filename)
                     
                     if uploader_backend == "bilitool":
                         # 等待获取BVID

@@ -74,16 +74,19 @@ DANMAKU_HEARTBEAT_SECONDS = 30
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
 DELETE_UPLOADED_FILES = False
+# 启用 DELETE_UPLOADED_FILES 时，延迟删除本地文件的保留时长（小时）。
+# 设为 0 表示上传成功后立即删除；建议保留一段时间以应对审核失败后重传。
+DELETE_UPLOADED_FILES_DELAY_HOURS = 24
 # 是否启用定时任务中的 BVID 更新与上传 (不影响手动 /run_upload_tasks)
 SCHEDULED_UPLOAD_ENABLED = True
 
 # --- B站上传后端配置 ---
 # 可选: "auto"（优先 biliup CLI，找不到则回退 bilitool）、"biliup_cli"、"bilitool"
-BILIBILI_UPLOADER_BACKEND = "auto"
+BILIBILI_UPLOADER_BACKEND = "biliup_cli"
 # biliup CLI 可执行文件路径（留空则尝试 PATH 和 third-party/**/biliup 自动探测）
-BILIUP_BIN_PATH = ""
+BILIUP_BIN_PATH = "third-party/biliupR-v1.1.28-x86_64-linux/biliup"
 # biliup CLI cookies 路径（留空则优先使用 COOKIES_PATH，再尝试与 biliup 同目录的 cookies.json）
-BILIUP_COOKIES_PATH = ""
+BILIUP_COOKIES_PATH = "third-party/biliupR-v1.1.28-x86_64-linux/cookies.json"
 # biliup CLI 提交接口（当前版本常用: app / b-cut-android）
 BILIUP_SUBMIT_MODE = "app"
 # 可选上传线路（留空自动探测）
