@@ -149,7 +149,15 @@ _run_supervisor() {
         "${cmd[@]}" &
         child_pid=$!
 
-        # 等待子进程退出
+        # 等待子进程退出，每小时检查日志轮转（需要 bash 5.1+ 的 wait -t）
+        while kill -0 "$child_pid" 2>/dev/null; do
+            wait -t 3600 "$child_pid" 2>/dev/null
+            if ! kill -0 "$child_pid" 2>/dev/null; then
+                break
+            fi
+            rotate_log_if_needed "$log_file"
+            clean_old_logs
+        done
         wait "$child_pid" 2>/dev/null
         local exit_code=$?
         child_pid=""
@@ -302,7 +310,10 @@ restart_service() {
     print_info "重启 ${SERVICE_NAME} 服务..."
 
     if is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE" || is_supervisor_running "$REC_SUPERVISOR_PID_FILE"; then
-        stop_service
+        if ! stop_service; then
+            print_error "停止服务失败，取消重启"
+            return 1
+        fi
         sleep 2
     else
         print_info "服务未运行，直接启动..."
