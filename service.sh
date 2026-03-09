@@ -1,48 +1,42 @@
 #!/bin/bash
 
 # Douyu-to-Bilibili Suite Service Management Script
-# 使用 uv 管理的 Python 项目服务脚本
+# 统一管理主服务和录制服务，带进程守护和日志管理
 
 # 配置变量
 SERVICE_NAME="douyu-to-bilibili-suite"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$SCRIPT_DIR/service.sh"
 APP_MODULE="app:app"
-PID_FILE="$SCRIPT_DIR/${SERVICE_NAME}.pid"
-LOG_FILE="$SCRIPT_DIR/${SERVICE_NAME}.log"
-
-# Recording service (optional, standalone process)
-RECORDING_SERVICE_NAME="${SERVICE_NAME}_recording"
-RECORDING_SCRIPT="recording_service.py"
-RECORDING_PID_FILE="$SCRIPT_DIR/${RECORDING_SERVICE_NAME}.pid"
-RECORDING_LOG_FILE="$SCRIPT_DIR/${RECORDING_SERVICE_NAME}.log"
-
-# 默认配置 (可根据需要修改)
 HOST="0.0.0.0"
 PORT="50009"
+RECORDING_SCRIPT="recording_service.py"
+
+# PID 文件（守护进程）
+MAIN_SUPERVISOR_PID_FILE="$SCRIPT_DIR/${SERVICE_NAME}_main_supervisor.pid"
+REC_SUPERVISOR_PID_FILE="$SCRIPT_DIR/${SERVICE_NAME}_rec_supervisor.pid"
+
+# 日志文件
+MAIN_LOG_FILE="$SCRIPT_DIR/${SERVICE_NAME}.log"
+REC_LOG_FILE="$SCRIPT_DIR/${SERVICE_NAME}_recording.log"
+
+# 守护进程配置
+RESTART_DELAY=5          # 重启等待秒数
+CRASH_WINDOW=60          # 崩溃检测窗口（秒）
+MAX_CRASHES=5            # 窗口内最大崩溃次数
+GRACEFUL_TIMEOUT=10      # 优雅退出超时（秒）
 
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 打印带颜色的信息
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 检查 uv 是否安装
 check_uv() {
@@ -53,402 +47,361 @@ check_uv() {
     fi
 }
 
-# 检查进程是否运行
-is_running() {
-    if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE")
-        if ps -p "$pid" > /dev/null 2>&1; then
+# 从 config.py 读取日志保留时间（小时），失败则返回 24
+get_log_retention_hours() {
+    local hours
+    hours=$(cd "$SCRIPT_DIR" && uv run python -c "from config import DELETE_UPLOADED_FILES_DELAY_HOURS; print(DELETE_UPLOADED_FILES_DELAY_HOURS)" 2>/dev/null)
+    if [ -z "$hours" ] || ! [[ "$hours" =~ ^[0-9]+$ ]]; then
+        echo "24"
+    else
+        echo "$hours"
+    fi
+}
+
+# 清理过期的归档日志文件
+clean_old_logs() {
+    local retention_hours
+    retention_hours=$(get_log_retention_hours)
+    local retention_minutes=$((retention_hours * 60))
+    find "$SCRIPT_DIR" -maxdepth 1 -name "${SERVICE_NAME}*.log.*" -type f -mmin +"${retention_minutes}" -delete 2>/dev/null
+}
+
+# 日志按日期轮转（在守护循环内调用，stdout 已重定向到日志文件）
+rotate_log_if_needed() {
+    local log_file="$1"
+    [ ! -f "$log_file" ] && return
+
+    local file_date today
+    if [[ "$(uname)" == "Darwin" ]]; then
+        file_date=$(stat -f "%Sm" -t "%Y-%m-%d" "$log_file" 2>/dev/null)
+    else
+        file_date=$(date -r "$log_file" "+%Y-%m-%d" 2>/dev/null)
+    fi
+    today=$(date "+%Y-%m-%d")
+
+    if [ -n "$file_date" ] && [ "$file_date" != "$today" ]; then
+        local archive="${log_file}.${file_date}"
+        mv "$log_file" "$archive"
+        # 重新打开 stdout/stderr 到新日志文件
+        exec >> "$log_file" 2>&1
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 日志轮转: $(basename "$log_file") -> $(basename "$archive")"
+    fi
+}
+
+# 检查守护进程是否运行
+is_supervisor_running() {
+    local pid_file="$1"
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 "$pid" 2>/dev/null; then
             return 0
         else
-            # PID 文件存在但进程不存在，清理 PID 文件
-            rm -f "$PID_FILE"
-            return 1
+            rm -f "$pid_file"
         fi
     fi
     return 1
 }
 
-# 检查录制进程是否运行
-is_recording_running() {
-    if [ -f "$RECORDING_PID_FILE" ]; then
-        local pid=$(cat "$RECORDING_PID_FILE")
-        if ps -p "$pid" > /dev/null 2>&1; then
-            return 0
-        else
-            rm -f "$RECORDING_PID_FILE"
-            return 1
+# ============================================================
+# 守护循环（内部命令 _supervise 调用）
+# 参数: <标签> <日志文件> <PID文件> <命令...>
+# ============================================================
+_run_supervisor() {
+    local label="$1"
+    local log_file="$2"
+    local pid_file="$3"
+    shift 3
+    local cmd=("$@")
+
+    local child_pid=""
+    local should_exit=false
+    local crash_times=()
+
+    # 信号处理：转发给子进程并退出，不触发自动重启
+    _handle_signal() {
+        should_exit=true
+        if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 收到停止信号，终止 ${label} (PID: $child_pid)"
+            kill "$child_pid" 2>/dev/null
+            local c=0
+            while [ $c -lt $GRACEFUL_TIMEOUT ] && kill -0 "$child_pid" 2>/dev/null; do
+                sleep 1
+                c=$((c + 1))
+            done
+            if kill -0 "$child_pid" 2>/dev/null; then
+                kill -9 "$child_pid" 2>/dev/null
+            fi
         fi
-    fi
-    return 1
+        rm -f "$pid_file"
+        exit 0
+    }
+    trap _handle_signal TERM INT
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 开始守护 ${label} (PID: $$)"
+
+    while true; do
+        # 日志轮转和清理
+        rotate_log_if_needed "$log_file"
+        clean_old_logs
+
+        # 启动子进程
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 启动 ${label}..."
+        "${cmd[@]}" &
+        child_pid=$!
+
+        # 等待子进程退出
+        wait "$child_pid" 2>/dev/null
+        local exit_code=$?
+        child_pid=""
+
+        [ "$should_exit" = true ] && break
+
+        local now=$(date +%s)
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] ${label} 退出 (code: $exit_code)"
+
+        # 快速崩溃检测
+        crash_times+=("$now")
+        local window_start=$((now - CRASH_WINDOW))
+        local filtered=()
+        for t in "${crash_times[@]}"; do
+            [ "$t" -ge "$window_start" ] && filtered+=("$t")
+        done
+        crash_times=("${filtered[@]}")
+
+        if [ ${#crash_times[@]} -ge $MAX_CRASHES ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] ${label} 在 ${CRASH_WINDOW}s 内崩溃 ${#crash_times[@]} 次，停止自动重启"
+            rm -f "$pid_file"
+            exit 1
+        fi
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 等待 ${RESTART_DELAY}s 后重启 ${label}..."
+        sleep "$RESTART_DELAY"
+    done
 }
 
-# 获取进程 PID
-get_pid() {
-    if [ -f "$PID_FILE" ]; then
-        cat "$PID_FILE"
-    else
-        echo ""
-    fi
-}
+# ============================================================
+# 用户命令
+# ============================================================
 
-# 获取录制进程 PID
-get_recording_pid() {
-    if [ -f "$RECORDING_PID_FILE" ]; then
-        cat "$RECORDING_PID_FILE"
-    else
-        echo ""
-    fi
-}
-
-# 启动服务
+# 启动所有服务
 start_service() {
-    print_info "启动 $SERVICE_NAME 服务..."
-    
-    # 检查服务是否已经运行
-    if is_running; then
-        local pid=$(get_pid)
-        print_warning "服务已经在运行中 (PID: $pid)"
+    print_info "启动 ${SERVICE_NAME} 服务..."
+
+    if is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE" || is_supervisor_running "$REC_SUPERVISOR_PID_FILE"; then
+        print_warning "服务已在运行中"
+        is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE" && print_info "  主服务守护 PID: $(cat "$MAIN_SUPERVISOR_PID_FILE")"
+        is_supervisor_running "$REC_SUPERVISOR_PID_FILE" && print_info "  录制服务守护 PID: $(cat "$REC_SUPERVISOR_PID_FILE")"
         return 1
     fi
-    
-    # 检查 uv
+
     check_uv
-    
-    # 切换到项目目录
-    cd "$SCRIPT_DIR" || {
-        print_error "无法切换到项目目录: $SCRIPT_DIR"
-        exit 1
-    }
-    
-    # 检查项目文件
-    if [ ! -f "pyproject.toml" ]; then
-        print_error "未找到 pyproject.toml 文件，请确认当前目录是正确的项目根目录"
-        exit 1
-    fi
-    
-    if [ ! -f "app.py" ]; then
-        print_error "未找到 app.py 文件"
-        exit 1
-    fi
-    
-    # 启动服务 (后台运行)
-    print_info "使用 uv 启动 FastAPI 应用..."
-    nohup uv run uvicorn "$APP_MODULE" \
-        --host "$HOST" \
-        --port "$PORT" \
-        --log-level info \
-        >> "$LOG_FILE" 2>&1 &
-    
-    local pid=$!
-    echo $pid > "$PID_FILE"
-    
-    # 等待一下确认服务启动成功
+
+    cd "$SCRIPT_DIR" || { print_error "无法切换到项目目录: $SCRIPT_DIR"; exit 1; }
+    [ ! -f "pyproject.toml" ] && { print_error "未找到 pyproject.toml"; exit 1; }
+    [ ! -f "app.py" ] && { print_error "未找到 app.py"; exit 1; }
+    [ ! -f "$RECORDING_SCRIPT" ] && { print_error "未找到 $RECORDING_SCRIPT"; exit 1; }
+
+    # 启动前清理过期日志
+    clean_old_logs
+
+    # 启动主服务守护循环
+    nohup "$SELF" _supervise main >> "$MAIN_LOG_FILE" 2>&1 &
+    local main_pid=$!
+    disown "$main_pid" 2>/dev/null
+    echo "$main_pid" > "$MAIN_SUPERVISOR_PID_FILE"
+
+    # 启动录制服务守护循环
+    nohup "$SELF" _supervise recording >> "$REC_LOG_FILE" 2>&1 &
+    local rec_pid=$!
+    disown "$rec_pid" 2>/dev/null
+    echo "$rec_pid" > "$REC_SUPERVISOR_PID_FILE"
+
     sleep 2
-    
-    if is_running; then
-        print_success "服务启动成功 (PID: $pid)"
-        print_info "服务地址: http://$HOST:$PORT"
-        print_info "日志文件: $LOG_FILE"
-        return 0
+
+    local ok=true
+    if is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE"; then
+        print_success "主服务启动成功 (守护 PID: $main_pid)"
     else
-        print_error "服务启动失败"
-        if [ -f "$LOG_FILE" ]; then
-            print_error "最新日志信息："
-            tail -n 10 "$LOG_FILE"
-        fi
-        return 1
-    fi
-}
-
-# 启动录制服务
-start_recording_service() {
-    print_info "启动 $RECORDING_SERVICE_NAME 服务..."
-
-    if is_recording_running; then
-        local pid=$(get_recording_pid)
-        print_warning "录制服务已经在运行中 (PID: $pid)"
-        return 1
+        print_error "主服务启动失败"
+        ok=false
     fi
 
-    check_uv
-
-    cd "$SCRIPT_DIR" || {
-        print_error "无法切换到项目目录: $SCRIPT_DIR"
-        exit 1
-    }
-
-    if [ ! -f "$RECORDING_SCRIPT" ]; then
-        print_error "未找到 $RECORDING_SCRIPT 文件"
-        exit 1
-    fi
-
-    print_info "使用 uv 启动录制服务..."
-    nohup uv run python "$RECORDING_SCRIPT" >> "$RECORDING_LOG_FILE" 2>&1 &
-
-    local pid=$!
-    echo $pid > "$RECORDING_PID_FILE"
-
-    sleep 2
-
-    if is_recording_running; then
-        print_success "录制服务启动成功 (PID: $pid)"
-        print_info "日志文件: $RECORDING_LOG_FILE"
-        return 0
+    if is_supervisor_running "$REC_SUPERVISOR_PID_FILE"; then
+        print_success "录制服务启动成功 (守护 PID: $rec_pid)"
     else
         print_error "录制服务启动失败"
-        if [ -f "$RECORDING_LOG_FILE" ]; then
-            print_error "最新日志信息："
-            tail -n 10 "$RECORDING_LOG_FILE"
-        fi
+        ok=false
+    fi
+
+    if [ "$ok" = true ]; then
+        print_info "服务地址: http://$HOST:$PORT"
+        print_info "主服务日志: $MAIN_LOG_FILE"
+        print_info "录制服务日志: $REC_LOG_FILE"
+        return 0
+    else
         return 1
     fi
 }
 
-# 停止服务
+# 停止单个守护进程
+_stop_one() {
+    local label="$1"
+    local pid_file="$2"
+
+    if ! is_supervisor_running "$pid_file"; then
+        return 0
+    fi
+
+    local pid=$(cat "$pid_file")
+    print_info "停止 ${label} (PID: $pid)..."
+
+    kill "$pid" 2>/dev/null
+
+    local c=0
+    while [ $c -lt $GRACEFUL_TIMEOUT ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        c=$((c + 1))
+    done
+
+    if kill -0 "$pid" 2>/dev/null; then
+        print_warning "${label} 优雅停止超时，强制终止..."
+        kill -9 "$pid" 2>/dev/null
+        sleep 1
+    fi
+
+    rm -f "$pid_file"
+
+    if ! kill -0 "$pid" 2>/dev/null; then
+        print_success "${label} 已停止"
+        return 0
+    else
+        print_error "${label} 停止失败"
+        return 1
+    fi
+}
+
+# 停止所有服务
 stop_service() {
-    print_info "停止 $SERVICE_NAME 服务..."
-    
-    if ! is_running; then
+    print_info "停止 ${SERVICE_NAME} 服务..."
+
+    if ! is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE" && ! is_supervisor_running "$REC_SUPERVISOR_PID_FILE"; then
         print_warning "服务未运行"
         return 1
     fi
-    
-    local pid=$(get_pid)
-    print_info "正在停止服务 (PID: $pid)..."
-    
-    # 优雅停止
-    kill "$pid" 2>/dev/null
-    
-    # 等待进程结束
-    local count=0
-    while [ $count -lt 10 ] && ps -p "$pid" > /dev/null 2>&1; do
-        sleep 1
-        count=$((count + 1))
-    done
-    
-    # 如果进程仍然存在，强制杀死
-    if ps -p "$pid" > /dev/null 2>&1; then
-        print_warning "优雅停止失败，强制终止进程..."
-        kill -9 "$pid" 2>/dev/null
-        sleep 1
-    fi
-    
-    # 清理 PID 文件
-    rm -f "$PID_FILE"
-    
-    if ! ps -p "$pid" > /dev/null 2>&1; then
-        print_success "服务已停止"
-        return 0
-    else
-        print_error "服务停止失败"
-        return 1
-    fi
+
+    local result=0
+    _stop_one "主服务" "$MAIN_SUPERVISOR_PID_FILE" || result=1
+    _stop_one "录制服务" "$REC_SUPERVISOR_PID_FILE" || result=1
+
+    [ $result -eq 0 ] && print_success "所有服务已停止"
+    return $result
 }
 
-# 停止录制服务
-stop_recording_service() {
-    print_info "停止 $RECORDING_SERVICE_NAME 服务..."
-
-    if ! is_recording_running; then
-        print_warning "录制服务未运行"
-        return 1
-    fi
-
-    local pid=$(get_recording_pid)
-    print_info "正在停止录制服务 (PID: $pid)..."
-
-    kill "$pid" 2>/dev/null
-
-    local count=0
-    while [ $count -lt 10 ] && ps -p "$pid" > /dev/null 2>&1; do
-        sleep 1
-        count=$((count + 1))
-    done
-
-    if ps -p "$pid" > /dev/null 2>&1; then
-        print_warning "优雅停止失败，强制终止进程..."
-        kill -9 "$pid" 2>/dev/null
-        sleep 1
-    fi
-
-    rm -f "$RECORDING_PID_FILE"
-
-    if ! ps -p "$pid" > /dev/null 2>&1; then
-        print_success "录制服务已停止"
-        return 0
-    else
-        print_error "录制服务停止失败"
-        return 1
-    fi
-}
-
-# 重启服务
+# 重启所有服务
 restart_service() {
-    print_info "重启 $SERVICE_NAME 服务..."
-    
-    if is_running; then
+    print_info "重启 ${SERVICE_NAME} 服务..."
+
+    if is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE" || is_supervisor_running "$REC_SUPERVISOR_PID_FILE"; then
         stop_service
-        if [ $? -eq 0 ]; then
-            sleep 2
-            start_service
-        else
-            print_error "停止服务失败，无法重启"
-            return 1
-        fi
+        sleep 2
     else
         print_info "服务未运行，直接启动..."
-        start_service
     fi
+
+    start_service
 }
 
-# 重启录制服务
-restart_recording_service() {
-    print_info "重启 $RECORDING_SERVICE_NAME 服务..."
-
-    if is_recording_running; then
-        stop_recording_service
-        if [ $? -eq 0 ]; then
-            sleep 2
-            start_recording_service
-        else
-            print_error "停止录制服务失败，无法重启"
-            return 1
-        fi
-    else
-        print_info "录制服务未运行，直接启动..."
-        start_recording_service
-    fi
-}
-
-# 查看服务状态
+# 查看所有服务状态
 status_service() {
-    print_info "检查 $SERVICE_NAME 服务状态..."
-    
-    if is_running; then
-        local pid=$(get_pid)
-        print_success "服务正在运行"
-        echo "  PID: $pid"
+    print_info "检查 ${SERVICE_NAME} 服务状态..."
+    echo ""
+
+    echo -e "${BLUE}--- 主服务 ---${NC}"
+    if is_supervisor_running "$MAIN_SUPERVISOR_PID_FILE"; then
+        local pid=$(cat "$MAIN_SUPERVISOR_PID_FILE")
+        print_success "运行中 (守护 PID: $pid)"
         echo "  服务地址: http://$HOST:$PORT"
-        echo "  项目目录: $SCRIPT_DIR"
-        echo "  日志文件: $LOG_FILE"
-        
-        # 显示进程信息
-        if command -v ps &> /dev/null; then
-            echo "  进程信息:"
-            ps -p "$pid" -o pid,ppid,pcpu,pmem,etime,cmd 2>/dev/null || echo "    无法获取进程详细信息"
-        fi
-        
-        # 检查端口占用
-        if command -v netstat &> /dev/null; then
-            echo "  端口监听:"
-            netstat -tlnp 2>/dev/null | grep ":$PORT " || echo "    端口信息不可用"
-        elif command -v ss &> /dev/null; then
-            echo "  端口监听:"
-            ss -tlnp | grep ":$PORT " || echo "    端口信息不可用"
-        fi
-        
-        return 0
+        echo "  日志: $MAIN_LOG_FILE"
+        ps -p "$pid" -o pid,ppid,pcpu,pmem,etime,cmd 2>/dev/null || true
     else
-        print_warning "服务未运行"
-        
-        # 检查是否有残留的 PID 文件
-        if [ -f "$PID_FILE" ]; then
-            print_warning "发现残留的 PID 文件，已清理"
-            rm -f "$PID_FILE"
-        fi
-        
-        return 1
+        print_warning "未运行"
+    fi
+
+    echo ""
+
+    echo -e "${BLUE}--- 录制服务 ---${NC}"
+    if is_supervisor_running "$REC_SUPERVISOR_PID_FILE"; then
+        local pid=$(cat "$REC_SUPERVISOR_PID_FILE")
+        print_success "运行中 (守护 PID: $pid)"
+        echo "  日志: $REC_LOG_FILE"
+        ps -p "$pid" -o pid,ppid,pcpu,pmem,etime,cmd 2>/dev/null || true
+    else
+        print_warning "未运行"
     fi
 }
 
-# 查看录制服务状态
-status_recording_service() {
-    print_info "检查 $RECORDING_SERVICE_NAME 服务状态..."
-
-    if is_recording_running; then
-        local pid=$(get_recording_pid)
-        print_success "录制服务正在运行"
-        echo "  PID: $pid"
-        echo "  项目目录: $SCRIPT_DIR"
-        echo "  日志文件: $RECORDING_LOG_FILE"
-
-        if command -v ps &> /dev/null; then
-            echo "  进程信息:"
-            ps -p "$pid" -o pid,ppid,pcpu,pmem,etime,cmd 2>/dev/null || echo "    无法获取进程详细信息"
-        fi
-        return 0
-    else
-        print_warning "录制服务未运行"
-
-        if [ -f "$RECORDING_PID_FILE" ]; then
-            print_warning "发现残留的 PID 文件，已清理"
-            rm -f "$RECORDING_PID_FILE"
-        fi
-        return 1
-    fi
-}
-
-# 查看日志
+# 查看所有服务日志
 logs_service() {
-    print_info "查看 $SERVICE_NAME 服务日志..."
-    
-    local lines=${2:-50}  # 默认显示最后50行
-    
-    if [ -f "$LOG_FILE" ]; then
-        print_info "=== 服务日志 (最后 $lines 行) ==="
-        tail -n "$lines" "$LOG_FILE"
-    else
-        print_warning "日志文件不存在: $LOG_FILE"
-    fi
-}
-
-# 查看录制服务日志
-logs_recording_service() {
-    print_info "查看 $RECORDING_SERVICE_NAME 服务日志..."
-
     local lines=${2:-50}
-    if [ -f "$RECORDING_LOG_FILE" ]; then
-        print_info "=== 录制服务日志 (最后 $lines 行) ==="
-        tail -n "$lines" "$RECORDING_LOG_FILE"
+
+    echo -e "${BLUE}=== 主服务日志 (最后 $lines 行) ===${NC}"
+    if [ -f "$MAIN_LOG_FILE" ]; then
+        tail -n "$lines" "$MAIN_LOG_FILE"
     else
-        print_warning "日志文件不存在: $RECORDING_LOG_FILE"
+        print_warning "日志不存在: $MAIN_LOG_FILE"
+    fi
+
+    echo ""
+
+    echo -e "${BLUE}=== 录制服务日志 (最后 $lines 行) ===${NC}"
+    if [ -f "$REC_LOG_FILE" ]; then
+        tail -n "$lines" "$REC_LOG_FILE"
+    else
+        print_warning "日志不存在: $REC_LOG_FILE"
     fi
 }
 
-# 显示帮助信息
+# 显示帮助
 show_help() {
-    echo "Usage: $0 {start|stop|restart|status|logs|start-recording|stop-recording|restart-recording|status-recording|logs-recording} [options]"
+    echo "Usage: $0 {start|stop|restart|status|logs} [options]"
     echo ""
     echo "Commands:"
-    echo "  start      启动服务"
-    echo "  stop       停止服务"
-    echo "  restart    重启服务"
-    echo "  status     查看服务状态"
-    echo "  logs [N]   查看日志 (可选：指定行数，默认50行)"
-    echo "  start-recording      启动录制服务"
-    echo "  stop-recording       停止录制服务"
-    echo "  restart-recording    重启录制服务"
-    echo "  status-recording     查看录制服务状态"
-    echo "  logs-recording [N]   查看录制服务日志 (可选：指定行数，默认50行)"
+    echo "  start      启动所有服务（主服务 + 录制服务），带进程守护"
+    echo "  stop       停止所有服务"
+    echo "  restart    重启所有服务"
+    echo "  status     查看所有服务状态"
+    echo "  logs [N]   查看日志 (默认各50行)"
     echo ""
     echo "Examples:"
     echo "  $0 start"
     echo "  $0 status"
     echo "  $0 logs 100"
-    echo "  $0 start-recording"
-    echo "  $0 logs-recording 100"
     echo ""
     echo "Configuration:"
     echo "  HOST: $HOST"
     echo "  PORT: $PORT"
-    echo "  PID_FILE: $PID_FILE"
-    echo "  LOG_FILE: $LOG_FILE"
-    echo "  RECORDING_PID_FILE: $RECORDING_PID_FILE"
-    echo "  RECORDING_LOG_FILE: $RECORDING_LOG_FILE"
+    echo "  主服务日志: $MAIN_LOG_FILE"
+    echo "  录制服务日志: $REC_LOG_FILE"
 }
 
+# ============================================================
 # 主逻辑
+# ============================================================
 case "$1" in
+    _supervise)
+        # 内部命令：由 start_service 调用，启动守护循环
+        cd "$SCRIPT_DIR" || exit 1
+        case "$2" in
+            main)
+                _run_supervisor "主服务" "$MAIN_LOG_FILE" "$MAIN_SUPERVISOR_PID_FILE" \
+                    uv run uvicorn "$APP_MODULE" --host "$HOST" --port "$PORT" --log-level info
+                ;;
+            recording)
+                _run_supervisor "录制服务" "$REC_LOG_FILE" "$REC_SUPERVISOR_PID_FILE" \
+                    uv run python "$RECORDING_SCRIPT"
+                ;;
+        esac
+        ;;
     start)
         start_service
         ;;
@@ -463,21 +416,6 @@ case "$1" in
         ;;
     logs)
         logs_service "$@"
-        ;;
-    start-recording)
-        start_recording_service
-        ;;
-    stop-recording)
-        stop_recording_service
-        ;;
-    restart-recording)
-        restart_recording_service
-        ;;
-    status-recording)
-        status_recording_service
-        ;;
-    logs-recording)
-        logs_recording_service "$@"
         ;;
     help|--help|-h)
         show_help
