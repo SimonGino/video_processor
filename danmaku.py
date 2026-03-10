@@ -6,6 +6,7 @@ import logging
 
 import config
 from dmconvert import convert_xml_to_ass
+from danmaku_postprocess import postprocess_ass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -144,6 +145,13 @@ def convert_danmaku():
             )
             # 假设 convert_xml_to_ass 成功时不抛出异常
             if os.path.exists(ass_file):
+                 postprocess_ass(
+                     ass_file=ass_file,
+                     resolution_y=resolution_y,
+                     display_area=config.DANMAKU_DISPLAY_AREA,
+                     opacity=config.DANMAKU_OPACITY,
+                     color_enabled=config.DANMAKU_COLOR_ENABLED,
+                 )
                  logging.info(f"成功转换: {os.path.basename(ass_file)}")
                  
                  # 删除XML文件 (根据配置决定是否删除)
