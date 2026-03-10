@@ -13,6 +13,16 @@ from .xml_writer import BilibiliXmlWriter
 
 logger = logging.getLogger("danmaku_collector")
 
+# Douyu col field → RGB int color mapping
+_DOUYU_COLOR_MAP = {
+    "1": 0xFF0000,   # 红
+    "2": 0x1E87F0,   # 蓝
+    "3": 0x7AC84B,   # 绿
+    "4": 0xFF7F00,   # 橙
+    "5": 0x9B39F4,   # 紫
+    "6": 0xFF69B4,   # 粉
+}
+
 
 class DouyuDanmakuCollector:
     def __init__(
@@ -64,8 +74,9 @@ class DouyuDanmakuCollector:
                                     text = d.get("txt")
                                     if not text:
                                         continue
+                                    color = _DOUYU_COLOR_MAP.get(d.get("col", ""), 16777215)
                                     offset = time.monotonic() - start
-                                    writer.write_danmaku(offset, text)
+                                    writer.write_danmaku(offset, text, color=color)
                                     count += 1
                             elif msg.type in {
                                 aiohttp.WSMsgType.CLOSE,
