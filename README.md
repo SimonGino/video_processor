@@ -76,21 +76,6 @@ python app.py                     # 前台运行（开发）
 ./service.sh start                # 后台运行（生产）
 ```
 
-## 内建录制服务（可选）
-
-前台运行：
-
-```bash
-uv run python recording_service.py
-```
-
-后台运行：
-
-```bash
-./service.sh start-recording
-./service.sh logs-recording 200
-```
-
 ## 配置说明
 
 ### config.py — 运行参数
@@ -114,11 +99,15 @@ uv run python recording_service.py
 | `SCHEDULE_INTERVAL_MINUTES` | 视频处理定时间隔（分钟） | `60` |
 | `STREAM_STATUS_CHECK_INTERVAL` | 直播状态检测间隔（分钟） | `10` |
 | `STREAM_START_TIME_ADJUSTMENT` | 开播时间向前调整（分钟） | `10` |
-| `DELETE_UPLOADED_FILES` | 上传后删除本地文件 | `True` |
+| `DELETE_UPLOADED_FILES` | 上传后删除本地文件 | `False` |
+| `DELETE_UPLOADED_FILES_DELAY_HOURS` | 启用删除时的延迟保留时长（小时） | `24` |
 | `SCHEDULED_UPLOAD_ENABLED` | 是否启用定时任务中的 BVID 更新与上传（不影响手动 `/run_upload_tasks`） | `True` |
 | `PROCESS_AFTER_STREAM_END` | 仅下播后处理 | `False` |
 | `API_BASE_URL` | API 服务器地址 | `http://localhost:50009` |
 | `API_ENABLED` | 启用 API 功能 | `True` |
+| `BILIBILI_UPLOADER_BACKEND` | 上传后端：`"auto"`、`"biliup_cli"`、`"bilitool"` | `biliup_cli` |
+| `BILIUP_BIN_PATH` | biliup CLI 可执行文件路径（留空自动探测） | `""` |
+| `BILIUP_COOKIES_PATH` | biliup CLI cookies 路径 | `""` |
 | `STREAMERS` | 主播列表 `[{"name": "...", "room_id": "..."}]` | — |
 
 ### Intel QSV / libva 兼容性（常见于 NAS、容器、定制系统）
@@ -241,13 +230,24 @@ dynamic: ''                          # 动态信息
 
 ### 服务管理
 
+`service.sh` 统一管理主服务和录制服务，内置进程守护（崩溃自动重启、日志轮转）。
+
 ```bash
-./service.sh start        # 启动后台服务
-./service.sh stop         # 停止服务
-./service.sh restart      # 重启服务
+./service.sh start        # 启动所有服务（主服务 + 录制服务），带进程守护
+./service.sh stop         # 停止所有服务
+./service.sh restart      # 重启所有服务
 ./service.sh status       # 查看运行状态
 ./service.sh logs 100     # 查看最近 100 行日志
 ```
+
+#### 开机自启（systemd）
+
+```bash
+sudo ./service.sh install     # 注册 systemd 服务并启用开机自启
+sudo ./service.sh uninstall   # 注销 systemd 服务
+```
+
+`install` 会根据当前脚本路径动态生成 systemd unit 文件，服务器重启后自动恢复服务。
 
 ### API 端点
 
@@ -269,18 +269,28 @@ dynamic: ''                          # 动态信息
 
 ```
 douyu-to-bilibili-suite/
-├── app.py              — FastAPI 入口、路由、数据库初始化
-├── scheduler.py        — APScheduler 定时任务函数
-├── danmaku.py          — 弹幕清理和 XML→ASS 转换
-├── encoder.py          — FFmpeg QSV 视频编码
-├── uploader.py         — B站上传和 BVID 管理
-├── stream_monitor.py   — 斗鱼直播状态监控
-├── models.py           — SQLAlchemy 数据模型
-├── config.py           — Python 配置常量
-├── config.yaml         — B站投稿参数
-├── service.sh          — Bash 服务管理脚本
-├── pyproject.toml      — uv 项目配置
-└── README.md           — 本文件
+├── app.py                — FastAPI 入口、路由、数据库初始化
+├── scheduler.py          — APScheduler 定时任务函数
+├── danmaku.py            — 弹幕清理和 XML→ASS 转换
+├── encoder.py            — FFmpeg QSV 视频编码
+├── uploader.py           — B站上传和 BVID 管理
+├── stream_monitor.py     — 斗鱼直播状态监控
+├── models.py             — SQLAlchemy 数据模型
+├── config.py             — Python 配置常量
+├── config.yaml           — B站投稿参数
+├── service.sh            — 服务管理脚本（进程守护、日志轮转、systemd 注册）
+├── recording_service.py  — 录制服务入口
+├── recording/            — 录制子包
+│   ├── recording_service.py      — 录制主循环
+│   ├── douyu_stream_resolver.py  — 斗鱼取流 URL 解析
+│   ├── ffmpeg_recorder.py        — FFmpeg 录制
+│   ├── danmaku_collector.py      — WebSocket 弹幕采集
+│   ├── segment_pipeline.py       — 分段管理
+│   ├── xml_writer.py             — 弹幕 XML 序列化
+│   ├── stt_codec.py              — 斗鱼协议编解码
+│   └── douyu_message_parser.py   — 斗鱼消息解析
+├── pyproject.toml        — uv 项目配置
+└── README.md             — 本文件
 ```
 
 ## 许可证
