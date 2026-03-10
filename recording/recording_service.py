@@ -66,6 +66,8 @@ async def _run_streamer(streamer: StreamerConfig, stop_event: asyncio.Event) -> 
     check_interval = int(getattr(config, "STREAM_STATUS_CHECK_INTERVAL", 10)) * 60
     danmaku_ws_url = getattr(config, "DANMAKU_WS_URL", "wss://danmuproxy.douyu.com:8506/")
     danmaku_heartbeat_seconds = int(getattr(config, "DANMAKU_HEARTBEAT_SECONDS", 30))
+    danmaku_ws_max_reconnects = int(getattr(config, "DANMAKU_WS_MAX_RECONNECTS", 0))
+    danmaku_ws_reconnect_base_delay = int(getattr(config, "DANMAKU_WS_RECONNECT_BASE_DELAY", 2))
 
     while not stop_event.is_set():
         is_live = await monitor.check_is_streaming()
@@ -97,6 +99,8 @@ async def _run_streamer(streamer: StreamerConfig, stop_event: asyncio.Event) -> 
                     ffmpeg_path=config.FFMPEG_PATH,
                     ws_url=danmaku_ws_url,
                     danmaku_heartbeat_seconds=danmaku_heartbeat_seconds,
+                    danmaku_ws_max_reconnects=danmaku_ws_max_reconnects,
+                    danmaku_ws_reconnect_base_delay=danmaku_ws_reconnect_base_delay,
                 )
                 if rc != 0:
                     logger.warning(f"[{streamer.name}] ffmpeg 退出码 {rc}，将尝试重启")

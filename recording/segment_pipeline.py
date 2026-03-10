@@ -28,6 +28,8 @@ async def run_one_segment(
     ffmpeg_path: str,
     ws_url: str,
     danmaku_heartbeat_seconds: int = 30,
+    danmaku_ws_max_reconnects: int = 0,
+    danmaku_ws_reconnect_base_delay: int = 2,
 ) -> int:
     flv_part = Path(flv_part_path)
     xml_part = Path(xml_part_path)
@@ -50,6 +52,8 @@ async def run_one_segment(
             room_id=room_id,
             output_path=str(xml_part),
             duration_seconds=duration_seconds,
+            max_reconnects=danmaku_ws_max_reconnects,
+            reconnect_base_delay=danmaku_ws_reconnect_base_delay,
         )
     )
 
