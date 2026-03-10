@@ -113,8 +113,37 @@ async def scheduled_log_stream_end(streamer_name: str):
     change = await monitor.detect_change()
 
     if change is None:
-        # No change or API error — skip
-        scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: {'直播中' if monitor.is_live() else '未直播'}")
+        # No change or API error — but check if live with no open session
+        if monitor.is_live():
+            async with AsyncSessionLocal() as db:
+                try:
+                    query = select(StreamSession).filter(
+                        StreamSession.streamer_name == streamer_name,
+                        StreamSession.start_time.is_not(None),
+                        StreamSession.end_time.is_(None)
+                    )
+                    result = await db.execute(query)
+                    existing = result.scalars().first()
+                    if existing is None:
+                        adjusted_start_time = current_time - timedelta(minutes=config.STREAM_START_TIME_ADJUSTMENT)
+                        new_session = StreamSession(
+                            streamer_name=streamer_name,
+                            start_time=adjusted_start_time,
+                            end_time=None
+                        )
+                        db.add(new_session)
+                        await db.commit()
+                        scheduler_logger.info(
+                            f"主播 {streamer_name} 在线但无 open session，已自动创建 "
+                            f"(start_time={adjusted_start_time}，已调整-{config.STREAM_START_TIME_ADJUSTMENT}分钟)"
+                        )
+                    else:
+                        scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: 直播中")
+                except Exception as e:
+                    scheduler_logger.error(f"定时任务(log_stream_end): 检查/创建启动 session 时出错: {e}", exc_info=True)
+                    await db.rollback()
+        else:
+            scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: 未直播")
         return
 
     old_status, new_status = change
