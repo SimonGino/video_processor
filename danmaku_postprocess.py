@@ -13,7 +13,7 @@ _OPACITY_STYLES = {"R2L", "L2R", "TOP", "BTM"}
 _MOVE_RE = re.compile(r"\\move\(\s*[-\d.]+\s*,\s*([-\d.]+)\s*,")
 
 # Regex to match \c&HBBGGRR color override tags (with surrounding braces handled separately)
-_COLOR_TAG_RE = re.compile(r"\{\\c&H[0-9A-Fa-f]{6}\}")
+_COLOR_TAG_RE = re.compile(r"\{\\c&H[0-9A-Fa-f]{6,8}\}")
 
 # Regex to match PrimaryColour in a style definition: &HAA... (2-digit alpha + 6-digit color)
 _PRIMARY_COLOUR_RE = re.compile(r"&H([0-9A-Fa-f]{2})([0-9A-Fa-f]{6})")
