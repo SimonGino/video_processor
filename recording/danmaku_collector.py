@@ -101,6 +101,8 @@ class DouyuDanmakuCollector:
                             heartbeat_task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await heartbeat_task
+                    except (aiohttp.ClientError, ssl.SSLError) as e:
+                        logger.warning("Danmaku WS connection error, will try to reconnect: %s", e)
                     finally:
                         with contextlib.suppress(Exception):
                             await ws.close()

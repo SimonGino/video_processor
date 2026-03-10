@@ -153,7 +153,7 @@ class TestColorToggle:
         # No standalone color tags should remain in event lines
         for line in result.splitlines():
             if line.strip().startswith("Dialogue:"):
-                assert not re.search(r"\{\\c&H[0-9A-Fa-f]{6}\}", line), \
+                assert not re.search(r"\{\\c&H[0-9A-Fa-f]{6,8}\}", line), \
                     f"Color tag found in: {line}"
 
 
