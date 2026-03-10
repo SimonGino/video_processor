@@ -361,9 +361,75 @@ logs_service() {
     fi
 }
 
+# systemd 配置
+SYSTEMD_UNIT_NAME="douyu-bilibili"
+SYSTEMD_UNIT_FILE="/etc/systemd/system/${SYSTEMD_UNIT_NAME}.service"
+
+# 安装 systemd 开机自启服务
+install_service() {
+    if [ "$(id -u)" -ne 0 ]; then
+        print_error "需要 root 权限，请使用 sudo 执行: sudo $0 install"
+        exit 1
+    fi
+
+    print_info "安装 ${SYSTEMD_UNIT_NAME} systemd 服务..."
+
+    # 获取运行用户（sudo 场景下取 SUDO_USER）
+    local run_user="${SUDO_USER:-$(whoami)}"
+    local run_group="$(id -gn "$run_user" 2>/dev/null || echo "$run_user")"
+
+    cat > "$SYSTEMD_UNIT_FILE" <<UNIT
+[Unit]
+Description=Douyu-to-Bilibili Suite
+After=network.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+WorkingDirectory=${SCRIPT_DIR}
+ExecStart=${SELF} start
+ExecStop=${SELF} stop
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    systemctl daemon-reload
+    systemctl enable "${SYSTEMD_UNIT_NAME}"
+
+    print_success "systemd 服务已安装并启用开机自启"
+    print_info "  Unit 文件: ${SYSTEMD_UNIT_FILE}"
+    print_info "  可使用 systemctl start ${SYSTEMD_UNIT_NAME} 启动服务"
+}
+
+# 卸载 systemd 开机自启服务
+uninstall_service() {
+    if [ "$(id -u)" -ne 0 ]; then
+        print_error "需要 root 权限，请使用 sudo 执行: sudo $0 uninstall"
+        exit 1
+    fi
+
+    if [ ! -f "$SYSTEMD_UNIT_FILE" ]; then
+        print_warning "服务未安装 (未找到 ${SYSTEMD_UNIT_FILE})"
+        return 0
+    fi
+
+    print_info "卸载 ${SYSTEMD_UNIT_NAME} systemd 服务..."
+
+    systemctl stop "${SYSTEMD_UNIT_NAME}" 2>/dev/null || true
+    systemctl disable "${SYSTEMD_UNIT_NAME}" 2>/dev/null || true
+    rm -f "$SYSTEMD_UNIT_FILE"
+    systemctl daemon-reload
+
+    print_success "systemd 服务已卸载"
+}
+
 # 显示帮助
 show_help() {
-    echo "Usage: $0 {start|stop|restart|status|logs} [options]"
+    echo "Usage: $0 {start|stop|restart|status|logs|install|uninstall} [options]"
     echo ""
     echo "Commands:"
     echo "  start      启动所有服务（主服务 + 录制服务），带进程守护"
@@ -371,6 +437,8 @@ show_help() {
     echo "  restart    重启所有服务"
     echo "  status     查看所有服务状态"
     echo "  logs [N]   查看日志 (默认各50行)"
+    echo "  install    注册 systemd 开机自启服务 (需要 sudo)"
+    echo "  uninstall  注销 systemd 开机自启服务 (需要 sudo)"
     echo ""
     echo "Examples:"
     echo "  $0 start"
@@ -416,6 +484,12 @@ case "$1" in
         ;;
     logs)
         logs_service "$@"
+        ;;
+    install)
+        install_service
+        ;;
+    uninstall)
+        uninstall_service
         ;;
     help|--help|-h)
         show_help
