@@ -76,6 +76,10 @@ DOUYU_DID = "10000000000000000000000000001501"
 # --- 弹幕采集配置 ---
 DANMAKU_WS_URL = "wss://danmuproxy.douyu.com:8506/"
 DANMAKU_HEARTBEAT_SECONDS = 30
+# WebSocket 断线重连最大次数 (0 表示不重连)
+DANMAKU_WS_MAX_RECONNECTS = 5
+# WebSocket 断线重连初始退避秒数 (指数退避: delay = min(base * 2^attempt, 30))
+DANMAKU_WS_RECONNECT_BASE_DELAY = 2
 
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)

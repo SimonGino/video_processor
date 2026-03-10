@@ -34,64 +34,115 @@ class DouyuDanmakuCollector:
         self._ws_url = ws_url
         self._heartbeat_seconds = int(heartbeat_seconds)
 
-    async def collect(self, *, room_id: str, output_path: str, duration_seconds: int) -> int:
+    async def collect(
+        self,
+        *,
+        room_id: str,
+        output_path: str,
+        duration_seconds: int,
+        max_reconnects: int = 0,
+        reconnect_base_delay: int = 2,
+    ) -> int:
         writer = BilibiliXmlWriter(output_path)
         writer.open()
 
         start = time.monotonic()
+        end = start + float(duration_seconds)
         count = 0
+        reconnect_attempt = 0
 
         try:
             async with aiohttp.ClientSession() as session:
+                # --- initial connection (no retry on first failure) ---
                 try:
                     ws = await self._connect_ws(session)
                 except (aiohttp.ClientError, ssl.SSLError) as e:
                     logger.warning("Failed to connect douyu danmaku ws: %s", e)
                     return 0
 
-                try:
-                    await ws.send_bytes(pack(f"type@=loginreq/roomid@={room_id}/"))
-                    await ws.send_bytes(pack(f"type@=joingroup/rid@={room_id}/gid@=-9999/"))
-
-                    heartbeat_task = asyncio.create_task(self._heartbeat(ws))
+                while True:
+                    # --- send login / join & run message loop ---
                     try:
-                        end = start + float(duration_seconds)
-                        while True:
-                            timeout = end - time.monotonic()
-                            if timeout <= 0:
-                                break
+                        await ws.send_bytes(pack(f"type@=loginreq/roomid@={room_id}/"))
+                        await ws.send_bytes(pack(f"type@=joingroup/rid@={room_id}/gid@=-9999/"))
 
-                            try:
-                                msg = await ws.receive(timeout=timeout)
-                            except asyncio.TimeoutError:
-                                break
+                        heartbeat_task = asyncio.create_task(self._heartbeat(ws))
+                        try:
+                            while True:
+                                timeout = end - time.monotonic()
+                                if timeout <= 0:
+                                    break
 
-                            if msg.type == aiohttp.WSMsgType.BINARY:
-                                for payload in iter_payloads(msg.data):
-                                    d = parse_kv(payload)
-                                    if d.get("type") != "chatmsg":
-                                        continue
-                                    text = d.get("txt")
-                                    if not text:
-                                        continue
-                                    color = _DOUYU_COLOR_MAP.get(d.get("col", ""), 16777215)
-                                    offset = time.monotonic() - start
-                                    writer.write_danmaku(offset, text, color=color)
-                                    count += 1
-                            elif msg.type in {
-                                aiohttp.WSMsgType.CLOSE,
-                                aiohttp.WSMsgType.CLOSING,
-                                aiohttp.WSMsgType.CLOSED,
-                                aiohttp.WSMsgType.ERROR,
-                            }:
-                                break
+                                try:
+                                    msg = await ws.receive(timeout=timeout)
+                                except asyncio.TimeoutError:
+                                    break
+
+                                if msg.type == aiohttp.WSMsgType.BINARY:
+                                    for payload in iter_payloads(msg.data):
+                                        d = parse_kv(payload)
+                                        if d.get("type") != "chatmsg":
+                                            continue
+                                        text = d.get("txt")
+                                        if not text:
+                                            continue
+                                        color = _DOUYU_COLOR_MAP.get(d.get("col", ""), 16777215)
+                                        offset = time.monotonic() - start
+                                        writer.write_danmaku(offset, text, color=color)
+                                        count += 1
+                                elif msg.type in {
+                                    aiohttp.WSMsgType.CLOSE,
+                                    aiohttp.WSMsgType.CLOSING,
+                                    aiohttp.WSMsgType.CLOSED,
+                                    aiohttp.WSMsgType.ERROR,
+                                }:
+                                    break
+                        finally:
+                            heartbeat_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await heartbeat_task
                     finally:
-                        heartbeat_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await heartbeat_task
-                finally:
-                    with contextlib.suppress(Exception):
-                        await ws.close()
+                        with contextlib.suppress(Exception):
+                            await ws.close()
+
+                    # --- check whether to reconnect ---
+                    remaining = end - time.monotonic()
+                    if remaining <= 0:
+                        break  # recording time exhausted
+
+                    if reconnect_attempt >= max_reconnects:
+                        if max_reconnects > 0:
+                            logger.warning(
+                                "Danmaku WS: max reconnects (%d) reached, stopping. collected=%d",
+                                max_reconnects, count,
+                            )
+                        break
+
+                    delay = min(reconnect_base_delay * (2 ** reconnect_attempt), 30)
+                    if delay > remaining:
+                        logger.info(
+                            "Danmaku WS: backoff %.1fs exceeds remaining %.1fs, stopping. collected=%d",
+                            delay, remaining, count,
+                        )
+                        break
+
+                    logger.warning(
+                        "Danmaku WS disconnected, reconnecting in %.1fs (attempt %d/%d, remaining=%.0fs, collected=%d)",
+                        delay, reconnect_attempt + 1, max_reconnects, remaining, count,
+                    )
+                    await asyncio.sleep(delay)
+                    reconnect_attempt += 1
+
+                    try:
+                        ws = await self._connect_ws(session)
+                    except (aiohttp.ClientError, ssl.SSLError) as e:
+                        logger.warning("Danmaku WS reconnect failed: %s", e)
+                        continue  # will check remaining time / attempt limit at top of loop
+
+                    logger.info(
+                        "Danmaku WS reconnected successfully (attempt %d/%d, collected=%d)",
+                        reconnect_attempt, max_reconnects, count,
+                    )
         finally:
             writer.close()
 
