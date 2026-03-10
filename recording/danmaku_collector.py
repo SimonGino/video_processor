@@ -105,39 +105,44 @@ class DouyuDanmakuCollector:
                         with contextlib.suppress(Exception):
                             await ws.close()
 
-                    # --- check whether to reconnect ---
-                    remaining = end - time.monotonic()
-                    if remaining <= 0:
-                        break  # recording time exhausted
+                    # --- attempt reconnection ---
+                    reconnected = False
+                    while not reconnected:
+                        remaining = end - time.monotonic()
+                        if remaining <= 0:
+                            break  # recording time exhausted
 
-                    if reconnect_attempt >= max_reconnects:
-                        if max_reconnects > 0:
-                            logger.warning(
-                                "Danmaku WS: max reconnects (%d) reached, stopping. collected=%d",
-                                max_reconnects, count,
+                        if reconnect_attempt >= max_reconnects:
+                            if max_reconnects > 0:
+                                logger.warning(
+                                    "Danmaku WS: max reconnects (%d) reached, stopping. collected=%d",
+                                    max_reconnects, count,
+                                )
+                            break
+
+                        delay = min(reconnect_base_delay * (2 ** reconnect_attempt), 30)
+                        if delay > remaining:
+                            logger.info(
+                                "Danmaku WS: backoff %.1fs exceeds remaining %.1fs, stopping. collected=%d",
+                                delay, remaining, count,
                             )
-                        break
+                            break
 
-                    delay = min(reconnect_base_delay * (2 ** reconnect_attempt), 30)
-                    if delay > remaining:
-                        logger.info(
-                            "Danmaku WS: backoff %.1fs exceeds remaining %.1fs, stopping. collected=%d",
-                            delay, remaining, count,
+                        logger.warning(
+                            "Danmaku WS disconnected, reconnecting in %.1fs (attempt %d/%d, remaining=%.0fs, collected=%d)",
+                            delay, reconnect_attempt + 1, max_reconnects, remaining, count,
                         )
+                        await asyncio.sleep(delay)
+                        reconnect_attempt += 1
+
+                        try:
+                            ws = await self._connect_ws(session)
+                            reconnected = True
+                        except (aiohttp.ClientError, ssl.SSLError) as e:
+                            logger.warning("Danmaku WS reconnect failed: %s", e)
+
+                    if not reconnected:
                         break
-
-                    logger.warning(
-                        "Danmaku WS disconnected, reconnecting in %.1fs (attempt %d/%d, remaining=%.0fs, collected=%d)",
-                        delay, reconnect_attempt + 1, max_reconnects, remaining, count,
-                    )
-                    await asyncio.sleep(delay)
-                    reconnect_attempt += 1
-
-                    try:
-                        ws = await self._connect_ws(session)
-                    except (aiohttp.ClientError, ssl.SSLError) as e:
-                        logger.warning("Danmaku WS reconnect failed: %s", e)
-                        continue  # will check remaining time / attempt limit at top of loop
 
                     logger.info(
                         "Danmaku WS reconnected successfully (attempt %d/%d, collected=%d)",

@@ -193,3 +193,59 @@ async def test_backoff_exceeds_remaining_time(tmp_path: Path):
     # Only the initial connection; backoff too long to reconnect
     assert connection_count == 1
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_transient_reconnect_failure_retries(tmp_path: Path):
+    """A failed reconnect attempt consumes budget but tries again on next attempt."""
+    from recording.danmaku_collector import DouyuDanmakuCollector
+
+    connection_count = 0
+    server_reject_next = False
+
+    async def ws_handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count, server_reject_next
+        connection_count += 1
+
+        if server_reject_next:
+            # Reject this connection to simulate transient failure
+            server_reject_next = False
+            raise web.HTTPServiceUnavailable()
+
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_bytes(pack(f"type@=chatmsg/nn@=u1/txt@=msg{connection_count}/"))
+
+        if connection_count == 1:
+            # First connection: close to trigger reconnect
+            server_reject_next = True  # next attempt will fail
+            await ws.close()
+        else:
+            # Final connection: stay open
+            async for _ in ws:
+                pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/ws", ws_handler)
+    runner, port = await _start_server(app)
+
+    out = tmp_path / "transient.xml.part"
+    try:
+        collector = DouyuDanmakuCollector(
+            ws_url=f"ws://127.0.0.1:{port}/ws", heartbeat_seconds=60
+        )
+        count = await collector.collect(
+            room_id="1234",
+            output_path=str(out),
+            duration_seconds=5,
+            max_reconnects=3,
+            reconnect_base_delay=0,
+        )
+    finally:
+        await runner.cleanup()
+
+    # initial connect + 1 rejected + 1 successful = used 2 of 3 reconnect attempts
+    assert count == 2
+    content = out.read_text(encoding="utf-8", errors="ignore")
+    assert "msg1" in content
