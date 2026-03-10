@@ -23,6 +23,12 @@ MIN_FILE_SIZE_MB = 10
 FONT_SIZE = 40
 # ASS 弹幕描边/阴影字体大小 (通常比 FONT_SIZE 小一点)
 SC_FONT_SIZE = 38
+# 弹幕显示区域比例 (0.0-1.0，从屏幕顶部算起，1.0 = 全屏，0.5 = 上半屏)
+DANMAKU_DISPLAY_AREA = 0.25
+# 弹幕透明度 (0.0-1.0，0.0 = 完全透明，1.0 = 完全不透明)
+DANMAKU_OPACITY = 0.8
+# 是否保留彩色弹幕 (False 时移除所有颜色标签，弹幕统一白色)
+DANMAKU_COLOR_ENABLED = True
 
 
 # --- FFmpeg/FFprobe 配置 ---
