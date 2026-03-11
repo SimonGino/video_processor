@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 def test_encode_video_fallback_when_qsv_init_fails(monkeypatch, tmp_path: Path):
-    import config
-    from encoder import encode_video
+    from douyu2bilibili import config
+    from douyu2bilibili.encoder import encode_video
 
     processing = tmp_path / "processing"
     upload = tmp_path / "upload"
@@ -58,8 +58,8 @@ def test_encode_video_fallback_when_qsv_init_fails(monkeypatch, tmp_path: Path):
 
 
 def test_encode_video_passes_qsv_runtime_env_and_device(monkeypatch, tmp_path: Path):
-    import config
-    from encoder import encode_video
+    from douyu2bilibili import config
+    from douyu2bilibili.encoder import encode_video
 
     processing = tmp_path / "processing"
     upload = tmp_path / "upload"
@@ -105,8 +105,8 @@ def test_encode_video_passes_qsv_runtime_env_and_device(monkeypatch, tmp_path: P
 
 
 def test_encode_video_tolerates_non_utf8_ffmpeg_output(monkeypatch, tmp_path: Path):
-    import config
-    from encoder import encode_video
+    from douyu2bilibili import config
+    from douyu2bilibili.encoder import encode_video
 
     processing = tmp_path / "processing"
     upload = tmp_path / "upload"

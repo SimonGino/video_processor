@@ -18,7 +18,7 @@ def _compute_auth(rid: str, ts: int, rand_str: str, key: str, enc_time: int, is_
 
 @pytest.mark.asyncio
 async def test_resolve_stream_url_flv_h5playv1_http_stub():
-    from recording.douyu_stream_resolver import DouyuH5PlayResolver
+    from douyu2bilibili.recording.douyu_stream_resolver import DouyuH5PlayResolver
 
     rid = "1234"
 
@@ -92,7 +92,7 @@ async def test_resolve_stream_url_flv_h5playv1_http_stub():
 
 @pytest.mark.asyncio
 async def test_resolve_stream_url_retries_with_fresh_encryption_after_403():
-    from recording.douyu_stream_resolver import DouyuH5PlayResolver
+    from douyu2bilibili.recording.douyu_stream_resolver import DouyuH5PlayResolver
 
     rid = "1234"
 
@@ -179,7 +179,7 @@ async def test_resolve_stream_url_retries_with_fresh_encryption_after_403():
 
 @pytest.mark.asyncio
 async def test_ensure_key_refreshes_when_server_expire_at_passed():
-    from recording.douyu_stream_resolver import DouyuH5PlayResolver
+    from douyu2bilibili.recording.douyu_stream_resolver import DouyuH5PlayResolver
 
     payloads = [
         {

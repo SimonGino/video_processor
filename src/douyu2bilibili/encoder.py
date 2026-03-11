@@ -6,7 +6,7 @@ import shutil
 import logging
 import sys
 
-import config
+from . import config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

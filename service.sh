@@ -7,7 +7,7 @@
 SERVICE_NAME="douyu-to-bilibili-suite"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$SCRIPT_DIR/service.sh"
-APP_MODULE="app:app"
+APP_MODULE="douyu2bilibili.app:app"
 HOST="0.0.0.0"
 PORT="50009"
 RECORDING_SCRIPT="recording_service.py"
@@ -50,7 +50,7 @@ check_uv() {
 # 从 config.py 读取日志保留时间（小时），失败则返回 24
 get_log_retention_hours() {
     local hours
-    hours=$(cd "$SCRIPT_DIR" && uv run python -c "from config import DELETE_UPLOADED_FILES_DELAY_HOURS; print(DELETE_UPLOADED_FILES_DELAY_HOURS)" 2>/dev/null)
+    hours=$(cd "$SCRIPT_DIR" && uv run python -c "from douyu2bilibili.config import DELETE_UPLOADED_FILES_DELAY_HOURS; print(DELETE_UPLOADED_FILES_DELAY_HOURS)" 2>/dev/null)
     if [ -z "$hours" ] || ! [[ "$hours" =~ ^[0-9]+$ ]]; then
         echo "24"
     else

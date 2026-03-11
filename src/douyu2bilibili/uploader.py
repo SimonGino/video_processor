@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 # 从同一目录导入配置和 Bilibili 工具
-import config
+from . import config
 try:
     from bilitool import LoginController, UploadController, FeedController  # 假设需要这些
 except Exception:  # pragma: no cover - optional when using biliup CLI backend
@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - optional when using biliup CLI backend
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_, or_
 
-from models import UploadedVideo, StreamSession # 需要导入模型
+from .models import UploadedVideo, StreamSession # 需要导入模型
 
 # 配置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -37,7 +37,7 @@ _BILIUP_CODE_RE = re.compile(r'"code"\s*:\s*(?:Number\()?(\d+)\)?')
 
 
 def _project_root() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _preferred_arch_tokens() -> list[str]:

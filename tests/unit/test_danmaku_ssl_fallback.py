@@ -24,7 +24,7 @@ ssl_module = ssl
 
 @pytest.mark.asyncio
 async def test_danmaku_collector_fallback_ssl_on_handshake_failure():
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     collector = DouyuDanmakuCollector(ws_url="wss://example.invalid:8506/")
     session = _FakeSession()

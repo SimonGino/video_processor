@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from aiohttp import web
 
-from recording.stt_codec import pack
+from douyu2bilibili.recording.stt_codec import pack
 
 
 async def _start_server(app: web.Application) -> tuple[web.AppRunner, int]:
@@ -20,7 +20,7 @@ async def _start_server(app: web.Application) -> tuple[web.AppRunner, int]:
 @pytest.mark.asyncio
 async def test_reconnect_continues_collecting(tmp_path: Path):
     """WebSocket disconnects mid-session; reconnect succeeds and danmaku continues."""
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     connection_count = 0
 
@@ -77,7 +77,7 @@ async def test_reconnect_continues_collecting(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_max_reconnects_reached(tmp_path: Path):
     """After max_reconnects, collection stops and returns collected count."""
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     connection_count = 0
 
@@ -118,7 +118,7 @@ async def test_max_reconnects_reached(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_no_reconnect_when_disabled(tmp_path: Path):
     """max_reconnects=0 means no reconnect, same as original behavior."""
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     connection_count = 0
 
@@ -157,7 +157,7 @@ async def test_no_reconnect_when_disabled(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_backoff_exceeds_remaining_time(tmp_path: Path):
     """When backoff delay exceeds remaining recording time, stop immediately."""
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     connection_count = 0
 
@@ -198,7 +198,7 @@ async def test_backoff_exceeds_remaining_time(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_transient_reconnect_failure_retries(tmp_path: Path):
     """A failed reconnect attempt consumes budget but tries again on next attempt."""
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     connection_count = 0
     server_reject_next = False

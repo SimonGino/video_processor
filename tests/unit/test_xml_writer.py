@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from recording.xml_writer import BilibiliXmlWriter
+from douyu2bilibili.recording.xml_writer import BilibiliXmlWriter
 
 
 def test_xml_is_parseable(tmp_path: Path):

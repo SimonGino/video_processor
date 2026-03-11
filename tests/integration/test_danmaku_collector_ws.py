@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 from aiohttp import web
 
-from recording.stt_codec import pack
+from douyu2bilibili.recording.stt_codec import pack
 
 
 @pytest.mark.asyncio
 async def test_danmaku_collector_writes_xml(tmp_path: Path):
-    from recording.danmaku_collector import DouyuDanmakuCollector
+    from douyu2bilibili.recording.danmaku_collector import DouyuDanmakuCollector
 
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()

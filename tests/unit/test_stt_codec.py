@@ -1,4 +1,4 @@
-from recording.stt_codec import escape, iter_payloads, pack, unescape
+from douyu2bilibili.recording.stt_codec import escape, iter_payloads, pack, unescape
 
 
 def test_escape_roundtrip():

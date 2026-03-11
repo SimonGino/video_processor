@@ -4,9 +4,9 @@ import subprocess
 import json
 import logging
 
-import config
+from . import config
 from dmconvert import convert_xml_to_ass
-from danmaku_postprocess import postprocess_ass
+from .danmaku_postprocess import postprocess_ass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
