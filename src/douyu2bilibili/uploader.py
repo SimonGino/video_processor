@@ -37,7 +37,7 @@ _BILIUP_CODE_RE = re.compile(r'"code"\s*:\s*(?:Number\()?(\d+)\)?')
 
 
 def _project_root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def _preferred_arch_tokens() -> list[str]:
