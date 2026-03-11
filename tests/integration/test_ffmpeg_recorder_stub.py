@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_ffmpeg_recorder_writes_part_file(tmp_path: Path):
-    from recording.ffmpeg_recorder import FfmpegRecorder
+    from douyu2bilibili.recording.ffmpeg_recorder import FfmpegRecorder
 
     ffmpeg_stub = Path(__file__).resolve().parents[1] / "bin" / "ffmpeg"
     out = tmp_path / "a.flv.part"

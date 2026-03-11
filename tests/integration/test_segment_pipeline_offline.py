@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 from aiohttp import web
 
-from recording.stt_codec import pack
+from douyu2bilibili.recording.stt_codec import pack
 
 
 @pytest.mark.asyncio
 async def test_segment_pipeline_offline(tmp_path: Path):
-    from recording.segment_pipeline import run_one_segment
+    from douyu2bilibili.recording.segment_pipeline import run_one_segment
 
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()

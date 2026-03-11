@@ -7,11 +7,11 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, StreamSession, UploadedVideo
+from douyu2bilibili.models import Base, StreamSession, UploadedVideo
 
 
 def test_extract_biliup_bvid_from_app_submit_output():
-    import uploader
+    from douyu2bilibili import uploader
 
     output = (
         'INFO biliup::uploader::bilibili: ResponseData { code: 0, data: Some(Object '
@@ -22,7 +22,7 @@ def test_extract_biliup_bvid_from_app_submit_output():
 
 
 def test_biliup_upload_video_entry_builds_command_and_returns_bvid(monkeypatch, tmp_path: Path):
-    import uploader
+    from douyu2bilibili import uploader
 
     video_path = tmp_path / "video.mp4"
     video_path.write_bytes(b"x")
@@ -76,7 +76,7 @@ def test_biliup_upload_video_entry_builds_command_and_returns_bvid(monkeypatch, 
 
 
 def test_biliup_append_video_entry_uses_vid_and_detects_modify_success(monkeypatch, tmp_path: Path):
-    import uploader
+    from douyu2bilibili import uploader
 
     video_path = tmp_path / "video_p2.mp4"
     video_path.write_bytes(b"x")
@@ -119,7 +119,7 @@ def test_biliup_append_video_entry_uses_vid_and_detects_modify_success(monkeypat
 
 
 def test_biliup_append_detects_rate_limit_21540(monkeypatch, tmp_path: Path):
-    import uploader
+    from douyu2bilibili import uploader
 
     video_path = tmp_path / "video_p3.mp4"
     video_path.write_bytes(b"x")
@@ -156,8 +156,8 @@ def test_biliup_append_detects_rate_limit_21540(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_upload_to_bilibili_with_biliup_cli_persists_bvid(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
@@ -237,7 +237,7 @@ async def test_upload_to_bilibili_with_biliup_cli_persists_bvid(tmp_path: Path, 
 
 @pytest.mark.asyncio
 async def test_update_video_bvids_skips_when_biliup_cli_backend(monkeypatch):
-    import uploader
+    from douyu2bilibili import uploader
 
     monkeypatch.setattr(uploader, "_detect_uploader_backend", lambda: "biliup_cli")
 
@@ -246,7 +246,7 @@ async def test_update_video_bvids_skips_when_biliup_cli_backend(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_biliup_append_async_wrapper_uses_to_thread(monkeypatch):
-    import uploader
+    from douyu2bilibili import uploader
 
     calls = {}
 
@@ -272,8 +272,8 @@ async def test_biliup_append_async_wrapper_uses_to_thread(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_upload_to_bilibili_biliup_cli_cools_down_and_retries_on_21540(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
@@ -361,8 +361,8 @@ async def test_upload_to_bilibili_biliup_cli_cools_down_and_retries_on_21540(tmp
 
 
 def test_handle_uploaded_file_after_success_defers_delete_when_delay_enabled(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     file_path = tmp_path / "video.mp4"
     file_path.write_text("x", encoding="utf-8")
@@ -377,8 +377,8 @@ def test_handle_uploaded_file_after_success_defers_delete_when_delay_enabled(tmp
 
 @pytest.mark.asyncio
 async def test_cleanup_delayed_uploaded_files_deletes_only_expired_records(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)

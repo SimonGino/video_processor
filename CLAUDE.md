@@ -39,34 +39,46 @@ No linting is configured.
 
 ## Project Structure
 
-Flat single-directory layout for the main app:
+Standard Python `src/` layout with `douyu2bilibili` package:
 
-- `app.py` — Entry point: FastAPI app, API endpoints, DB setup, startup/shutdown
-- `scheduler.py` — APScheduler task functions (video pipeline, stream status check, stale session cleanup)
-- `danmaku.py` — Danmaku processing: file cleanup (`cleanup_small_files`), XML→ASS conversion (`convert_danmaku`)
-- `encoder.py` — Video encoding: FFmpeg QSV encoding, skip-encoding mode (`encode_video`)
-- `uploader.py` — Bilibili upload: dual backend support (biliup CLI or bilitool), BVID management, session-based grouping
-- `stream_monitor.py` — `StreamStatusMonitor` class: per-streamer Douyu API polling and state tracking
-- `config.py` — All configuration constants (paths, intervals, feature flags, streamer list)
+```
+src/douyu2bilibili/          # Main package (all business logic)
+├── __init__.py
+├── app.py                   # FastAPI app, API endpoints, DB setup, startup/shutdown
+├── scheduler.py             # APScheduler task functions (video pipeline, stream status check, stale session cleanup)
+├── danmaku.py               # Danmaku processing: file cleanup, XML→ASS conversion
+├── danmaku_postprocess.py   # ASS post-processing: display area clipping, opacity, color tags
+├── encoder.py               # Video encoding: FFmpeg QSV encoding, skip-encoding mode
+├── uploader.py              # Bilibili upload: dual backend (biliup CLI / bilitool), BVID management
+├── stream_monitor.py        # StreamStatusMonitor: per-streamer Douyu API polling
+├── config.py                # All configuration constants (paths, intervals, feature flags)
+├── models.py                # SQLAlchemy models: StreamSession, UploadedVideo
+├── recording_service.py     # Recording service entry point (delegates to recording/)
+└── recording/               # Live stream recording sub-package
+    ├── recording_service.py # Main recording loop orchestration
+    ├── douyu_stream_resolver.py
+    ├── ffmpeg_recorder.py
+    ├── danmaku_collector.py
+    ├── segment_pipeline.py
+    ├── xml_writer.py
+    ├── stt_codec.py
+    └── douyu_message_parser.py
+```
+
+Root directory files:
+- `app.py` — Thin entry point, delegates to `douyu2bilibili.app`
+- `recording_service.py` — Thin entry point, delegates to `douyu2bilibili.recording_service`
 - `config.yaml` — Bilibili upload metadata (title template with `{time}` placeholder, tags, category, description)
-- `models.py` — SQLAlchemy models: `StreamSession`, `UploadedVideo`
 - `service.sh` — Unified service management with process supervisor (auto-restart on crash, log rotation, log cleanup)
-- `recording_service.py` — Entry point for the built-in recording service
 
-The `recording/` sub-package handles live stream recording:
-- `recording_service.py` — Main recording loop orchestration
-- `douyu_stream_resolver.py` — Resolves Douyu room ID to playback URL
-- `ffmpeg_recorder.py` — FFmpeg subprocess for FLV recording
-- `danmaku_collector.py` — WebSocket-based danmaku collection
-- `segment_pipeline.py` — Segment management pipeline
-- `xml_writer.py` — Danmaku XML serialization
-- `stt_codec.py` / `douyu_message_parser.py` — Douyu protocol codec
+Package-internal imports use relative imports (`from . import config`, `from .models import ...`).
+Tests import via `from douyu2bilibili import ...` or `from douyu2bilibili.xxx import ...`.
 
 ## Architecture
 
 - **Sync-in-async pattern**: Synchronous video processing functions in `danmaku.py` and `encoder.py` (FFmpeg, file ops) run via `loop.run_in_executor()` in `scheduler.py` to avoid blocking the async event loop
 - **3 scheduled jobs** (in `scheduler.py`): video pipeline (default 60min), stream status check (default 10min per streamer), stale session cleanup (12h)
-- **Circular dependency**: `scheduler.py` uses late import (`_get_app_deps()`) to access `AsyncSessionLocal`, `scheduler`, and `stream_monitors` from `app.py`
+- **Circular dependency**: `scheduler.py` uses late import (`_get_app_deps()`) to access `AsyncSessionLocal`, `scheduler`, and `stream_monitors` from `app.py` via relative import (`from .app import ...`)
 - **Session-based upload grouping**: Videos are matched to stream sessions by time range. First video creates a new Bilibili submission; subsequent videos append as multi-part (分P)
 - **Dual upload backend**: `uploader.py` supports `biliup_cli` (biliupR binary) and `bilitool` (Python library), configured via `BILIBILI_UPLOADER_BACKEND`. The biliup CLI backend auto-discovers binaries under `third-party/` with platform-aware sorting
 - **BVID retrieval**: Retry logic (3 attempts with delays) after upload to fetch the generated BVID. Regex parsing of biliup CLI stdout (`_BILIUP_BVID_RE`)

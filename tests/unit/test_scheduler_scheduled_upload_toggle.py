@@ -37,8 +37,8 @@ class _FakeSessionFactory:
 
 @pytest.mark.asyncio
 async def test_scheduled_pipeline_skips_upload_when_scheduled_upload_disabled(monkeypatch):
-    import config as config_module
-    import scheduler as scheduler_module
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
 
     events = []
     fake_db = _FakeDbSession()
@@ -80,8 +80,8 @@ async def test_scheduled_pipeline_skips_upload_when_scheduled_upload_disabled(mo
 
 @pytest.mark.asyncio
 async def test_manual_upload_task_still_runs_when_scheduled_upload_disabled(monkeypatch):
-    import config as config_module
-    import scheduler as scheduler_module
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
 
     events = []
 
@@ -106,8 +106,8 @@ async def test_manual_upload_task_still_runs_when_scheduled_upload_disabled(monk
 
 @pytest.mark.asyncio
 async def test_scheduled_pipeline_handles_cancellation_during_sync_processing(monkeypatch):
-    import config as config_module
-    import scheduler as scheduler_module
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
 
     events = []
 

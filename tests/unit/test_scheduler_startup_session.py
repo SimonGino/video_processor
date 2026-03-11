@@ -84,8 +84,8 @@ class _FakeMonitor:
 @pytest.mark.asyncio
 async def test_startup_live_no_session_creates_one(monkeypatch):
     """Streamer online at startup with no open session → creates a new session."""
-    import config as config_module
-    import scheduler as scheduler_module
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
 
     fake_db = _FakeDbSession(existing_session=None)
     monitor = _FakeMonitor(live=True, change=None)
@@ -110,8 +110,8 @@ async def test_startup_live_no_session_creates_one(monkeypatch):
 @pytest.mark.asyncio
 async def test_startup_live_with_existing_session_skips(monkeypatch):
     """Streamer online but open session already exists → no new session created."""
-    import config as config_module
-    import scheduler as scheduler_module
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
 
     existing = MagicMock()
     existing.end_time = None
@@ -134,8 +134,8 @@ async def test_startup_live_with_existing_session_skips(monkeypatch):
 @pytest.mark.asyncio
 async def test_startup_offline_does_not_create(monkeypatch):
     """Streamer offline, detect_change returns None → no session created."""
-    import config as config_module
-    import scheduler as scheduler_module
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
 
     fake_db = _FakeDbSession(existing_session=None)
     monitor = _FakeMonitor(live=False, change=None)

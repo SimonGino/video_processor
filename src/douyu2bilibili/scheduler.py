@@ -5,11 +5,11 @@ from datetime import timedelta
 
 from sqlalchemy import desc, select
 
-import config
-from danmaku import cleanup_small_files, convert_danmaku
-from encoder import encode_video
-from uploader import load_yaml_config, upload_to_bilibili, update_video_bvids
-from models import StreamSession, local_now
+from . import config
+from .danmaku import cleanup_small_files, convert_danmaku
+from .encoder import encode_video
+from .uploader import load_yaml_config, upload_to_bilibili, update_video_bvids
+from .models import StreamSession, local_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 scheduler_logger = logging.getLogger("scheduler")
@@ -21,7 +21,7 @@ def _get_app_deps():
 
     Returns (AsyncSessionLocal, scheduler, stream_monitors).
     """
-    from app import AsyncSessionLocal, scheduler, stream_monitors
+    from .app import AsyncSessionLocal, scheduler, stream_monitors
     return AsyncSessionLocal, scheduler, stream_monitors
 
 

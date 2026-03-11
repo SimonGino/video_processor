@@ -1,4 +1,4 @@
-from recording.douyu_message_parser import parse_kv
+from douyu2bilibili.recording.douyu_message_parser import parse_kv
 
 
 def test_parse_chatmsg_minimal():

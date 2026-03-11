@@ -2,7 +2,7 @@ import os
 
 # --- 路径配置 ---
 # 获取项目根目录
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # Use project-local folders by default (kept out of git via .gitignore)
 PROCESSING_FOLDER = os.path.join(PROJECT_ROOT, "data", "processing")

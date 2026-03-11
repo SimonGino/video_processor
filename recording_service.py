@@ -1,17 +1,6 @@
-import asyncio
-import logging
+"""Thin entry point — delegates to douyu2bilibili.recording_service."""
 
-from recording.recording_service import run_recording_service
-
-
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-    asyncio.run(run_recording_service())
-
+from douyu2bilibili.recording_service import main
 
 if __name__ == "__main__":
     main()
-

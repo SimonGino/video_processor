@@ -5,7 +5,7 @@ import textwrap
 
 import pytest
 
-from danmaku_postprocess import postprocess_ass
+from douyu2bilibili.danmaku_postprocess import postprocess_ass
 
 # --- Helpers ---
 

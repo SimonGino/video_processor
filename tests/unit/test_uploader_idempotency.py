@@ -5,13 +5,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, StreamSession, UploadedVideo
+from douyu2bilibili.models import Base, StreamSession, UploadedVideo
 
 
 @pytest.mark.asyncio
 async def test_pending_bvid_session_skips_new_upload(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
@@ -92,8 +92,8 @@ async def test_pending_bvid_session_skips_new_upload(tmp_path: Path, monkeypatch
 
 @pytest.mark.asyncio
 async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
@@ -191,8 +191,8 @@ async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path,
 
 @pytest.mark.asyncio
 async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
@@ -271,8 +271,8 @@ async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path:
 
 @pytest.mark.asyncio
 async def test_session_assignment_uses_buffer_minutes(tmp_path: Path, monkeypatch):
-    import uploader
-    import config as config_module
+    from douyu2bilibili import uploader
+    from douyu2bilibili import config as config_module
 
     db_path = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)

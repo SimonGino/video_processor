@@ -5,8 +5,8 @@ import signal
 from dataclasses import dataclass
 from datetime import datetime
 
-import config
-from stream_monitor import StreamStatusMonitor
+from .. import config
+from ..stream_monitor import StreamStatusMonitor
 
 from .douyu_stream_resolver import DouyuH5PlayResolver
 from .segment_pipeline import run_one_segment
