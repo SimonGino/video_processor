@@ -447,6 +447,14 @@ def get_timestamp_from_filename(filepath):
         logging.warning(f"无法从文件名 {filename} 解析时间戳: {e}，将使用当前时间。")
         return datetime.now()
 
+def _reset_yaml_globals():
+    """Reset all YAML-derived globals to empty state."""
+    global yaml_config
+    yaml_config = {}
+    streamer_configs.clear()
+    upload_global_config.clear()
+
+
 def load_yaml_config():
     """加载 config.yaml 文件，解析按主播分组的配置结构并验证必要键"""
     global yaml_config, streamer_configs, upload_global_config
@@ -455,7 +463,7 @@ def load_yaml_config():
             yaml_config = yaml.safe_load(f)
             if not isinstance(yaml_config, dict):
                 logging.error(f"读取 {config.YAML_CONFIG_PATH} 失败: 文件内容不是有效的 YAML 字典格式。")
-                yaml_config = {}
+                _reset_yaml_globals()
                 return False
             logging.info(f"成功加载配置文件: {config.YAML_CONFIG_PATH}")
 
@@ -463,7 +471,7 @@ def load_yaml_config():
             streamers_raw = yaml_config.get('streamers')
             if not isinstance(streamers_raw, dict) or not streamers_raw:
                 logging.error(f"配置文件 {config.YAML_CONFIG_PATH} 中缺少 'streamers' 或格式错误。")
-                yaml_config = {}
+                _reset_yaml_globals()
                 return False
 
             required_upload_keys = ['title', 'tid', 'tag', 'desc', 'source']
@@ -511,7 +519,7 @@ def load_yaml_config():
                 streamers_list.append({"name": streamer_name, "room_id": str(room_id)})
 
             if not valid:
-                yaml_config = {}
+                _reset_yaml_globals()
                 return False
 
             streamer_configs.clear()
@@ -531,15 +539,15 @@ def load_yaml_config():
 
     except FileNotFoundError:
         logging.error(f"配置文件 {config.YAML_CONFIG_PATH} 未找到。请确保该文件存在。")
-        yaml_config = {}
+        _reset_yaml_globals()
         return False
     except yaml.YAMLError as e:
         logging.error(f"解析配置文件 {config.YAML_CONFIG_PATH} 时出错: {e}")
-        yaml_config = {}
+        _reset_yaml_globals()
         return False
     except Exception as e:
         logging.error(f"加载配置文件时发生未知错误: {e}")
-        yaml_config = {}
+        _reset_yaml_globals()
         return False
 
 async def upload_to_bilibili(db: AsyncSession):

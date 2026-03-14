@@ -83,9 +83,13 @@ setup() {
 }
 
 teardown_quiet() {
-    detect_iface
-    tc qdisc del dev "${IFACE}" root 2>/dev/null || true
-    iptables -t mangle -D OUTPUT -m cgroup --path "${CGROUP_NAME}" -j MARK --set-mark "${MARK}" 2>/dev/null || true
+    local iface
+    iface=$(ip route show default | awk '/default/ {print $5; exit}' 2>/dev/null)
+
+    if [ -n "$iface" ]; then
+        tc qdisc del dev "$iface" root 2>/dev/null || true
+        iptables -t mangle -D OUTPUT -m cgroup --path "${CGROUP_NAME}" -j MARK --set-mark "${MARK}" 2>/dev/null || true
+    fi
     [ -d "${CGROUP_PATH}" ] && rmdir "${CGROUP_PATH}" 2>/dev/null || true
 }
 
