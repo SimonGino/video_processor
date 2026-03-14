@@ -83,7 +83,7 @@ DANMAKU_WS_RECONNECT_BASE_DELAY = 2
 
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
-DELETE_UPLOADED_FILES = False
+DELETE_UPLOADED_FILES = True
 # 启用 DELETE_UPLOADED_FILES 时，延迟删除本地文件的保留时长（小时）。
 # 设为 0 表示上传成功后立即删除；建议保留一段时间以应对审核失败后重传。
 # 该值同时用于 service.sh 日志文件的保留时间（超过此时间的归档日志将被自动清理）。
