@@ -514,15 +514,17 @@ def load_yaml_config():
                 yaml_config = {}
                 return False
 
-            streamer_configs = parsed_configs
+            streamer_configs.clear()
+            streamer_configs.update(parsed_configs)
 
             # 更新 config.STREAMERS 以便录制服务和状态监控使用
             config.STREAMERS = streamers_list
 
             # --- 解析全局上传配置 ---
-            upload_global_config = yaml_config.get('upload', {})
-            if not isinstance(upload_global_config, dict):
-                upload_global_config = {}
+            global_upload = yaml_config.get('upload', {})
+            upload_global_config.clear()
+            if isinstance(global_upload, dict):
+                upload_global_config.update(global_upload)
 
             logging.info(f"已加载 {len(streamer_configs)} 个主播配置: {list(streamer_configs.keys())}")
             return True
