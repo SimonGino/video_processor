@@ -118,14 +118,9 @@ API_BASE_URL = "http://localhost:50009"
 API_ENABLED = True
 
 # --- 主播配置 ---
-# 主播列表 (支持多主播监控)
-STREAMERS = [
-    {"name": "洞主", "room_id": "138243"},
-]
-# Backward compatibility
-DEFAULT_STREAMER_NAME = STREAMERS[0]["name"]
-STREAMER_NAME = STREAMERS[0]["name"]
-DOUYU_ROOM_ID = STREAMERS[0]["room_id"]
+# 主播列表 — 启动时由 load_yaml_config() 从 config.yaml 的 streamers 部分自动填充。
+# 格式: [{"name": "...", "room_id": "..."}, ...]
+STREAMERS: list[dict[str, str]] = []
 
 # --- 其他 ---
 # 确保处理和上传目录存在

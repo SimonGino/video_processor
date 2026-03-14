@@ -35,14 +35,15 @@ async def scheduled_video_pipeline():
 
     # Check if "process only after stream ends" is enabled
     if config.PROCESS_AFTER_STREAM_END:
-        monitor = stream_monitors.get(config.STREAMER_NAME)
-        if monitor and monitor.is_live():
-            scheduler_logger.info(
-                f"定时任务：检测到主播 {config.STREAMER_NAME} 正在直播中，"
-                f"当前配置为仅下播后处理，跳过压制和上传任务"
-            )
+        any_live = False
+        for name, monitor in stream_monitors.items():
+            if monitor.is_live():
+                scheduler_logger.info(f"定时任务：检测到主播 {name} 正在直播中")
+                any_live = True
+        if any_live:
+            scheduler_logger.info("当前配置为仅下播后处理，跳过压制和上传任务")
             return
-        scheduler_logger.info(f"定时任务：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制和上传任务")
+        scheduler_logger.info("定时任务：所有主播当前均不在直播，将继续执行压制和上传任务")
 
     # Check skip encoding config
     is_skip_encoding = config.SKIP_VIDEO_ENCODING
