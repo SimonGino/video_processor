@@ -49,8 +49,21 @@ async def init_db():
         try:
             await conn.run_sync(Base.metadata.create_all)
             logger.info("数据库表结构已创建或已存在")
+            # Migrate: add streamer_name column to uploaded_videos if missing
+            await conn.run_sync(_migrate_uploaded_videos_streamer_name)
         except Exception as e:
             logger.error(f"初始化数据库结构时出错: {e}", exc_info=True)
+
+
+def _migrate_uploaded_videos_streamer_name(conn):
+    """Add streamer_name column to uploaded_videos table if it doesn't exist."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(conn)
+    columns = [col["name"] for col in inspector.get_columns("uploaded_videos")]
+    if "streamer_name" not in columns:
+        conn.execute(text("ALTER TABLE uploaded_videos ADD COLUMN streamer_name VARCHAR"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_uploaded_videos_streamer_name ON uploaded_videos (streamer_name)"))
+        logger.info("数据库迁移：已为 uploaded_videos 表添加 streamer_name 列")
 
 # =================== Pydantic Models ===================
 
@@ -441,11 +454,12 @@ async def log_stream_start(
 async def trigger_processing_tasks(background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """Trigger background video processing (cleanup, convert, encode)."""
     if config.PROCESS_AFTER_STREAM_END:
-        monitor = stream_monitors.get(config.STREAMER_NAME)
-        if monitor and monitor.is_live():
-            logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行压制任务")
-            return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行压制任务"}
-        logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行压制任务")
+        live_names = [name for name, m in stream_monitors.items() if m.is_live()]
+        if live_names:
+            msg = f"主播 {', '.join(live_names)} 正在直播中，当前配置为仅下播后处理，无法执行压制任务"
+            logger.info(f"手动触发：{msg}")
+            return {"message": msg}
+        logger.info("手动触发：所有主播当前不在直播，将继续执行压制任务")
 
     is_skip_encoding = config.SKIP_VIDEO_ENCODING
 
@@ -466,11 +480,12 @@ async def trigger_upload_tasks(
 ):
     """Trigger background BVID update and upload tasks."""
     if config.PROCESS_AFTER_STREAM_END:
-        monitor = stream_monitors.get(config.STREAMER_NAME)
-        if monitor and monitor.is_live():
-            logger.info(f"手动触发：检测到主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，拒绝执行上传任务")
-            return {"message": f"主播 {config.STREAMER_NAME} 正在直播中，当前配置为仅下播后处理，无法执行上传任务"}
-        logger.info(f"手动触发：主播 {config.STREAMER_NAME} 当前不在直播，将继续执行上传任务")
+        live_names = [name for name, m in stream_monitors.items() if m.is_live()]
+        if live_names:
+            msg = f"主播 {', '.join(live_names)} 正在直播中，当前配置为仅下播后处理，无法执行上传任务"
+            logger.info(f"手动触发：{msg}")
+            return {"message": msg}
+        logger.info("手动触发：所有主播当前不在直播，将继续执行上传任务")
 
     is_skip_encoding = config.SKIP_VIDEO_ENCODING
     file_type = "FLV" if is_skip_encoding else "MP4"

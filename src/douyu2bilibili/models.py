@@ -34,6 +34,7 @@ class UploadedVideo(Base):
     title = Column(String, nullable=False)
     first_part_filename = Column(String, nullable=False, unique=True)
     upload_time = Column(DateTime, nullable=True)  # 从文件名解析的视频录制时间
+    streamer_name = Column(String, nullable=True, index=True)  # 主播名称
     created_at = Column(DateTime, default=local_now)  # 数据库记录创建时间
 
     def __repr__(self):

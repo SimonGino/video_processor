@@ -83,7 +83,7 @@ DANMAKU_WS_RECONNECT_BASE_DELAY = 2
 
 # --- 上传后文件处理 ---
 # 上传成功后是否删除本地 MP4 文件 (True: 删除, False: 保留)
-DELETE_UPLOADED_FILES = False
+DELETE_UPLOADED_FILES = True
 # 启用 DELETE_UPLOADED_FILES 时，延迟删除本地文件的保留时长（小时）。
 # 设为 0 表示上传成功后立即删除；建议保留一段时间以应对审核失败后重传。
 # 该值同时用于 service.sh 日志文件的保留时间（超过此时间的归档日志将被自动清理）。
@@ -118,14 +118,9 @@ API_BASE_URL = "http://localhost:50009"
 API_ENABLED = True
 
 # --- 主播配置 ---
-# 主播列表 (支持多主播监控)
-STREAMERS = [
-    {"name": "洞主", "room_id": "138243"},
-]
-# Backward compatibility
-DEFAULT_STREAMER_NAME = STREAMERS[0]["name"]
-STREAMER_NAME = STREAMERS[0]["name"]
-DOUYU_ROOM_ID = STREAMERS[0]["room_id"]
+# 主播列表 — 启动时由 load_yaml_config() 从 config.yaml 的 streamers 部分自动填充。
+# 格式: [{"name": "...", "room_id": "..."}, ...]
+STREAMERS: list[dict[str, str]] = []
 
 # --- 其他 ---
 # 确保处理和上传目录存在

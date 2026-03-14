@@ -165,15 +165,18 @@ async def test_upload_to_bilibili_with_biliup_cli_persists_bvid(tmp_path: Path, 
         await conn.run_sync(Base.metadata.create_all)
     session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    uploader.yaml_config = {
-        "title": "测试标题{time}",
-        "tid": 171,
-        "tag": "t1,t2",
-        "source": "",
-        "cover": "",
-        "dynamic": "",
-        "desc": "d",
-        "cdn": None,
+    uploader.yaml_config = {"streamers": {"洞主": {}}}  # non-empty to pass check
+    uploader.streamer_configs = {
+        "洞主": {
+            "title": "测试标题{time}",
+            "tid": 171,
+            "tag": "t1,t2",
+            "source": "",
+            "cover": "",
+            "dynamic": "",
+            "desc": "d",
+            "cdn": None,
+        }
     }
 
     monkeypatch.setattr(uploader, "_detect_uploader_backend", lambda: "biliup_cli")
@@ -201,10 +204,9 @@ async def test_upload_to_bilibili_with_biliup_cli_persists_bvid(tmp_path: Path, 
     monkeypatch.setattr(config_module, "API_ENABLED", False)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
     monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
-    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
     monkeypatch.setattr(config_module, "STREAM_START_TIME_ADJUSTMENT", 10)
 
-    base_time = datetime(2026, 2, 24, 17, 30, 0)
+    base_time = datetime.now().replace(second=0, microsecond=0)
     p1 = tmp_path / f"洞主录播{base_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
     p2_time = base_time + timedelta(hours=1)
     p2 = tmp_path / f"洞主录播{p2_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
@@ -281,15 +283,18 @@ async def test_upload_to_bilibili_biliup_cli_cools_down_and_retries_on_21540(tmp
         await conn.run_sync(Base.metadata.create_all)
     session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    uploader.yaml_config = {
-        "title": "测试标题{time}",
-        "tid": 171,
-        "tag": "t1",
-        "source": "",
-        "cover": "",
-        "dynamic": "",
-        "desc": "d",
-        "cdn": None,
+    uploader.yaml_config = {"streamers": {"洞主": {}}}
+    uploader.streamer_configs = {
+        "洞主": {
+            "title": "测试标题{time}",
+            "tid": 171,
+            "tag": "t1",
+            "source": "",
+            "cover": "",
+            "dynamic": "",
+            "desc": "d",
+            "cdn": None,
+        }
     }
 
     monkeypatch.setattr(uploader, "_detect_uploader_backend", lambda: "biliup_cli")
@@ -321,12 +326,11 @@ async def test_upload_to_bilibili_biliup_cli_cools_down_and_retries_on_21540(tmp
     monkeypatch.setattr(config_module, "API_ENABLED", False)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
     monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
-    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
     monkeypatch.setattr(config_module, "STREAM_START_TIME_ADJUSTMENT", 10)
     monkeypatch.setattr(config_module, "BILIUP_RATE_LIMIT_COOLDOWN_SECONDS", 123)
     monkeypatch.setattr(config_module, "BILIUP_RATE_LIMIT_APPEND_MAX_RETRIES", 1)
 
-    file_time = datetime(2026, 2, 24, 10, 0, 0)
+    file_time = datetime.now().replace(second=0, microsecond=0)
     video_path = tmp_path / f"洞主录播{file_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
     video_path.write_text("x", encoding="utf-8")
 

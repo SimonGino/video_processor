@@ -1,11 +1,32 @@
-source: "https://www.douyu.com/138243"
-title: "洞主直播录像{time}弹幕版"
-desc: |
-      录播合作可以私信我
-      洞主的精彩直播录像！
-      主播直播间地址：https://www.douyu.com/138243
-      欢迎关注！
-tid: 171 # the type id of video
-tag: "洞主,凯哥,直播录像,游戏实况"
-cover: '' # the cover of video (if you want to customize, set it as the path to your cover image)
-dynamic: '' # the dynamic information of video
+streamers:
+  洞主:
+    room_id: "138243"
+    upload:
+      source: "https://www.douyu.com/138243"
+      title: "洞主直播录像{time}弹幕版"
+      desc: |
+            录播合作可以私信我
+            洞主的精彩直播录像！
+            主播直播间地址：https://www.douyu.com/138243
+            欢迎关注！
+      tid: 171
+      tag: "洞主,凯哥,直播录像,游戏实况"
+      cover: ''
+      dynamic: ''
+
+  银剑君:
+    room_id: "251783"
+    upload:
+      source: "https://www.douyu.com/251783"
+      title: "银剑君直播录像{time}弹幕版"
+      desc: |
+            银剑君的精彩直播录像！
+            主播直播间地址：https://www.douyu.com/251783
+            欢迎关注！
+      tid: 171
+      tag: "银剑君,直播录像,游戏实况"
+      cover: ''
+      dynamic: ''
+
+upload:
+  max_concurrent: 1

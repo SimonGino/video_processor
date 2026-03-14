@@ -19,15 +19,18 @@ async def test_pending_bvid_session_skips_new_upload(tmp_path: Path, monkeypatch
         await conn.run_sync(Base.metadata.create_all)
     session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    uploader.yaml_config = {
-        "title": "测试标题{time}",
-        "tid": 171,
-        "tag": "t1",
-        "source": "s",
-        "cover": "",
-        "dynamic": "",
-        "desc": "d",
-        "cdn": None,
+    uploader.yaml_config = {"streamers": {"洞主": {}}}
+    uploader.streamer_configs = {
+        "洞主": {
+            "title": "测试标题{time}",
+            "tid": 171,
+            "tag": "t1",
+            "source": "s",
+            "cover": "",
+            "dynamic": "",
+            "desc": "d",
+            "cdn": None,
+        }
     }
 
     class FakeLoginController:
@@ -59,11 +62,11 @@ async def test_pending_bvid_session_skips_new_upload(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
 
+    monkeypatch.setattr(config_module, "BILIBILI_UPLOADER_BACKEND", "bilitool")
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
     monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
-    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
 
     file_time = datetime(2026, 2, 24, 10, 0, 0)
     video_path = tmp_path / f"洞主录播{file_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
@@ -101,15 +104,18 @@ async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path,
         await conn.run_sync(Base.metadata.create_all)
     session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    uploader.yaml_config = {
-        "title": "测试标题{time}",
-        "tid": 171,
-        "tag": "t1",
-        "source": "s",
-        "cover": "",
-        "dynamic": "",
-        "desc": "d",
-        "cdn": None,
+    uploader.yaml_config = {"streamers": {"洞主": {}}}
+    uploader.streamer_configs = {
+        "洞主": {
+            "title": "测试标题{time}",
+            "tid": 171,
+            "tag": "t1",
+            "source": "s",
+            "cover": "",
+            "dynamic": "",
+            "desc": "d",
+            "cdn": None,
+        }
     }
 
     class FakeLoginController:
@@ -143,13 +149,13 @@ async def test_append_uses_time_window_count_and_sets_video_name(tmp_path: Path,
 
     monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
 
+    monkeypatch.setattr(config_module, "BILIBILI_UPLOADER_BACKEND", "bilitool")
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
     monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
-    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
 
-    file_time = datetime(2026, 2, 24, 10, 0, 0)
+    file_time = datetime.now().replace(second=0, microsecond=0)
     new_part = tmp_path / f"洞主录播{file_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
     new_part.write_text("x", encoding="utf-8")
 
@@ -200,15 +206,18 @@ async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path:
         await conn.run_sync(Base.metadata.create_all)
     session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    uploader.yaml_config = {
-        "title": "测试标题{time}",
-        "tid": 171,
-        "tag": "t1",
-        "source": "s",
-        "cover": "",
-        "dynamic": "",
-        "desc": "d",
-        "cdn": None,
+    uploader.yaml_config = {"streamers": {"洞主": {}}}
+    uploader.streamer_configs = {
+        "洞主": {
+            "title": "测试标题{time}",
+            "tid": 171,
+            "tag": "t1",
+            "source": "s",
+            "cover": "",
+            "dynamic": "",
+            "desc": "d",
+            "cdn": None,
+        }
     }
 
     class FakeLoginController:
@@ -222,13 +231,16 @@ async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path:
         def append_video_entry(self, *args, **kwargs):
             return True
 
+    file_time = datetime.now().replace(second=0, microsecond=0)
+    expected_title = f"测试标题{file_time.strftime('%Y年%m月%d日')}"
+
     class FakeFeedController:
         def __init__(self):
             self.calls = []
 
         def get_video_dict_info(self, size=20, status_type=""):
             self.calls.append({"size": size, "status_type": status_type})
-            return {"测试标题2026年02月24日": "BV1TEST0000000000"}
+            return {expected_title: "BV1TEST0000000000"}
 
     feed = FakeFeedController()
     monkeypatch.setattr(uploader, "LoginController", FakeLoginController)
@@ -242,13 +254,12 @@ async def test_new_upload_fetches_bvid_with_pubed_and_uses_async_sleep(tmp_path:
 
     monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
 
+    monkeypatch.setattr(config_module, "BILIBILI_UPLOADER_BACKEND", "bilitool")
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
     monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
-    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
 
-    file_time = datetime(2026, 2, 24, 10, 0, 0)
     video_path = tmp_path / f"洞主录播{file_time.strftime('%Y-%m-%dT%H_%M_%S')}.mp4"
     video_path.write_text("x", encoding="utf-8")
 
@@ -280,15 +291,18 @@ async def test_session_assignment_uses_buffer_minutes(tmp_path: Path, monkeypatc
         await conn.run_sync(Base.metadata.create_all)
     session_local = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    uploader.yaml_config = {
-        "title": "测试标题{time}",
-        "tid": 171,
-        "tag": "t1",
-        "source": "s",
-        "cover": "",
-        "dynamic": "",
-        "desc": "d",
-        "cdn": None,
+    uploader.yaml_config = {"streamers": {"洞主": {}}}
+    uploader.streamer_configs = {
+        "洞主": {
+            "title": "测试标题{time}",
+            "tid": 171,
+            "tag": "t1",
+            "source": "s",
+            "cover": "",
+            "dynamic": "",
+            "desc": "d",
+            "cdn": None,
+        }
     }
 
     class FakeLoginController:
@@ -320,11 +334,11 @@ async def test_session_assignment_uses_buffer_minutes(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(uploader.asyncio, "sleep", fake_sleep)
 
+    monkeypatch.setattr(config_module, "BILIBILI_UPLOADER_BACKEND", "bilitool")
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "API_ENABLED", True)
     monkeypatch.setattr(config_module, "DELETE_UPLOADED_FILES", False)
     monkeypatch.setattr(config_module, "UPLOAD_FOLDER", str(tmp_path))
-    monkeypatch.setattr(config_module, "DEFAULT_STREAMER_NAME", "洞主")
     monkeypatch.setattr(config_module, "STREAM_START_TIME_ADJUSTMENT", 10)
 
     now = datetime.now().replace(second=0, microsecond=0)
