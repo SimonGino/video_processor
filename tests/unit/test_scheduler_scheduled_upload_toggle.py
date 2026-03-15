@@ -36,27 +36,20 @@ class _FakeSessionFactory:
 
 
 @pytest.mark.asyncio
-async def test_scheduled_pipeline_skips_upload_when_scheduled_upload_disabled(monkeypatch):
+async def test_scheduled_upload_skips_when_disabled(monkeypatch):
     from douyu2bilibili import config as config_module
     from douyu2bilibili import scheduler as scheduler_module
 
     events = []
     fake_db = _FakeDbSession()
 
-    monkeypatch.setattr(scheduler_module.asyncio, "get_running_loop", lambda: _FakeLoop())
     monkeypatch.setattr(
         scheduler_module,
         "_get_app_deps",
         lambda: (_FakeSessionFactory(fake_db), None, {}),
     )
 
-    monkeypatch.setattr(config_module, "PROCESS_AFTER_STREAM_END", False)
-    monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
     monkeypatch.setattr(config_module, "SCHEDULED_UPLOAD_ENABLED", False, raising=False)
-
-    monkeypatch.setattr(scheduler_module, "cleanup_small_files", lambda: events.append("cleanup"))
-    monkeypatch.setattr(scheduler_module, "convert_danmaku", lambda: events.append("convert"))
-    monkeypatch.setattr(scheduler_module, "encode_video", lambda: events.append("encode"))
 
     def fake_load_yaml_config():
         events.append("load_yaml")
@@ -72,10 +65,38 @@ async def test_scheduled_pipeline_skips_upload_when_scheduled_upload_disabled(mo
     monkeypatch.setattr(scheduler_module, "update_video_bvids", fake_update_video_bvids)
     monkeypatch.setattr(scheduler_module, "upload_to_bilibili", fake_upload_to_bilibili)
 
-    await scheduler_module.scheduled_video_pipeline()
+    await scheduler_module.scheduled_upload()
 
-    assert events == ["cleanup", "convert", "encode"]
+    # Upload should be skipped entirely when disabled
+    assert events == []
     assert fake_db.closed is False
+
+
+@pytest.mark.asyncio
+async def test_scheduled_video_processing_runs_independently(monkeypatch):
+    from douyu2bilibili import config as config_module
+    from douyu2bilibili import scheduler as scheduler_module
+
+    events = []
+
+    monkeypatch.setattr(scheduler_module.asyncio, "get_running_loop", lambda: _FakeLoop())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_get_app_deps",
+        lambda: (_FakeSessionFactory(_FakeDbSession()), None, {}),
+    )
+
+    monkeypatch.setattr(config_module, "PROCESS_AFTER_STREAM_END", False)
+    monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
+
+    monkeypatch.setattr(scheduler_module, "cleanup_small_files", lambda: events.append("cleanup"))
+    monkeypatch.setattr(scheduler_module, "convert_danmaku", lambda: events.append("convert"))
+    monkeypatch.setattr(scheduler_module, "encode_video", lambda: events.append("encode"))
+
+    await scheduler_module.scheduled_video_processing()
+
+    # Processing runs without touching upload at all
+    assert events == ["cleanup", "convert", "encode"]
 
 
 @pytest.mark.asyncio
@@ -105,7 +126,7 @@ async def test_manual_upload_task_still_runs_when_scheduled_upload_disabled(monk
 
 
 @pytest.mark.asyncio
-async def test_scheduled_pipeline_handles_cancellation_during_sync_processing(monkeypatch):
+async def test_scheduled_processing_handles_cancellation(monkeypatch):
     from douyu2bilibili import config as config_module
     from douyu2bilibili import scheduler as scheduler_module
 
@@ -124,23 +145,11 @@ async def test_scheduled_pipeline_handles_cancellation_during_sync_processing(mo
 
     monkeypatch.setattr(config_module, "PROCESS_AFTER_STREAM_END", False)
     monkeypatch.setattr(config_module, "SKIP_VIDEO_ENCODING", False)
-    monkeypatch.setattr(config_module, "SCHEDULED_UPLOAD_ENABLED", True, raising=False)
 
     monkeypatch.setattr(scheduler_module, "cleanup_small_files", lambda: events.append("cleanup"))
     monkeypatch.setattr(scheduler_module, "convert_danmaku", lambda: events.append("convert"))
     monkeypatch.setattr(scheduler_module, "encode_video", lambda: events.append("encode"))
 
-    monkeypatch.setattr(scheduler_module, "load_yaml_config", lambda: events.append("load_yaml") or True)
-
-    async def fake_update_video_bvids(_db):
-        events.append("update_bvids")
-
-    async def fake_upload_to_bilibili(_db):
-        events.append("upload")
-
-    monkeypatch.setattr(scheduler_module, "update_video_bvids", fake_update_video_bvids)
-    monkeypatch.setattr(scheduler_module, "upload_to_bilibili", fake_upload_to_bilibili)
-
-    await scheduler_module.scheduled_video_pipeline()
+    await scheduler_module.scheduled_video_processing()
 
     assert events == []
