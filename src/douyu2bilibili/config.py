@@ -7,6 +7,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 # Use project-local folders by default (kept out of git via .gitignore)
 PROCESSING_FOLDER = os.path.join(PROJECT_ROOT, "data", "processing")
 UPLOAD_FOLDER = os.path.join(PROJECT_ROOT, "data", "upload")
+FAILED_FOLDER = os.path.join(PROJECT_ROOT, "data", "failed")
 # Bilibili 配置文件路径
 YAML_CONFIG_PATH = "config.yaml"
 # Bilibili Cookies 文件路径
@@ -46,6 +47,8 @@ FFMPEG_QSV_LIBVA_DRIVER_NAME = "iHD"
 # --- 视频处理配置 ---
 # 是否跳过视频压制步骤 (True: 跳过压制直接上传FLV, False: 压制为MP4后上传)
 SKIP_VIDEO_ENCODING = False
+# 文件处理连续失败次数阈值，超过后移入 data/failed/ 隔离
+MAX_RETRY_COUNT = 3
 # 无弹幕版本视频的标题后缀 (当跳过压制时使用)
 NO_DANMAKU_TITLE_SUFFIX = "【无弹幕版】"
 # 弹幕版本视频的标题后缀 (当不跳过压制时使用)
@@ -53,8 +56,10 @@ DANMAKU_TITLE_SUFFIX = "【弹幕版】"
 
 
 # --- 调度配置 ---
-# 定时任务执行间隔 (分钟)
+# 视频处理（清理、弹幕转换、压制）定时间隔 (分钟)
 SCHEDULE_INTERVAL_MINUTES = 60
+# 上传定时间隔 (分钟)
+UPLOAD_INTERVAL_MINUTES = 30
 # 检测主播状态的时间间隔 (分钟)
 STREAM_STATUS_CHECK_INTERVAL = 10
 # 检测主播状态时，开播时间向前调整的时间量 (分钟)
@@ -125,4 +130,5 @@ STREAMERS: list[dict[str, str]] = []
 # --- 其他 ---
 # 确保处理和上传目录存在
 os.makedirs(PROCESSING_FOLDER, exist_ok=True)
-os.makedirs(UPLOAD_FOLDER, exist_ok=True) 
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(FAILED_FOLDER, exist_ok=True)

@@ -23,7 +23,8 @@ from .uploader import (
 from .models import Base, StreamSession, UploadedVideo, local_now
 from .stream_monitor import StreamStatusMonitor
 from .scheduler import (
-    scheduled_video_pipeline,
+    scheduled_video_processing,
+    scheduled_upload,
     scheduled_log_stream_end,
     clean_stale_sessions,
     run_processing_sync,
@@ -150,12 +151,21 @@ async def startup_event():
 
     logger.info("正在启动定时任务调度器...")
     try:
-        interval_minutes = config.SCHEDULE_INTERVAL_MINUTES
+        processing_interval = config.SCHEDULE_INTERVAL_MINUTES
+        upload_interval = config.UPLOAD_INTERVAL_MINUTES
         scheduler.add_job(
-            scheduled_video_pipeline,
+            scheduled_video_processing,
             'interval',
-            minutes=interval_minutes,
-            id='video_pipeline_job',
+            minutes=processing_interval,
+            id='video_processing_job',
+            replace_existing=True,
+            next_run_time=local_now()
+        )
+        scheduler.add_job(
+            scheduled_upload,
+            'interval',
+            minutes=upload_interval,
+            id='upload_job',
             replace_existing=True,
             next_run_time=local_now()
         )
@@ -181,7 +191,10 @@ async def startup_event():
             logger.info("定时任务调度器：已添加 'clean_stale_sessions_job'，每12小时执行一次")
 
         scheduler.start()
-        logger.info(f"定时任务调度器已启动，每 {interval_minutes} 分钟执行一次 'video_pipeline_job'")
+        logger.info(
+            f"定时任务调度器已启动，视频处理每 {processing_interval} 分钟，"
+            f"上传每 {upload_interval} 分钟"
+        )
     except Exception as e:
         logger.error(f"启动定时任务调度器失败: {e}", exc_info=True)
 

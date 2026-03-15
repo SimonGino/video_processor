@@ -1,5 +1,6 @@
 import os
 import glob
+import shutil
 import subprocess
 import json
 import logging
@@ -10,6 +11,46 @@ from .danmaku_postprocess import postprocess_ass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Module-level failure counter: {xml_file_path: consecutive_failure_count}
+_failure_counts: dict[str, int] = {}
+
+
+def _quarantine_files(*file_paths: str):
+    """Move files to the failed directory for manual inspection."""
+    for fp in file_paths:
+        if not os.path.exists(fp):
+            continue
+        dest = os.path.join(config.FAILED_FOLDER, os.path.basename(fp))
+        try:
+            shutil.move(fp, dest)
+            logging.warning(f"已隔离文件到 failed 目录: {os.path.basename(fp)}")
+        except Exception as e:
+            logging.error(f"隔离文件 {os.path.basename(fp)} 失败: {e}")
+
+
+def _record_failure(key: str, *related_files: str) -> bool:
+    """Increment failure count. If threshold reached, quarantine files.
+
+    Returns True if the file was quarantined.
+    """
+    _failure_counts[key] = _failure_counts.get(key, 0) + 1
+    count = _failure_counts[key]
+    if count >= config.MAX_RETRY_COUNT:
+        logging.warning(
+            f"文件 {os.path.basename(key)} 已连续失败 {count} 次，"
+            f"达到阈值 {config.MAX_RETRY_COUNT}，移入隔离目录"
+        )
+        _quarantine_files(key, *related_files)
+        _failure_counts.pop(key, None)
+        return True
+    logging.info(f"文件 {os.path.basename(key)} 失败计数: {count}/{config.MAX_RETRY_COUNT}")
+    return False
+
+
+def _clear_failure(key: str):
+    """Clear failure count on success."""
+    _failure_counts.pop(key, None)
 
 
 def cleanup_small_files():
@@ -107,6 +148,12 @@ def convert_danmaku():
         flv_part_file = flv_file + ".part"
         ass_file = base_name + ".ass"
 
+        # Skip files that have already reached the failure threshold
+        if _failure_counts.get(xml_file, 0) >= config.MAX_RETRY_COUNT:
+            logging.info(f"文件 {os.path.basename(xml_file)} 已达失败阈值，跳过")
+            skipped_count += 1
+            continue
+
         # 检查是否存在对应的 .flv.part 文件，如果存在则跳过
         if os.path.exists(flv_part_file):
             logging.info(f"跳过转换，因为找到正在录制的文件: {os.path.basename(flv_part_file)}")
@@ -129,6 +176,7 @@ def convert_danmaku():
         resolution_x, resolution_y = get_video_resolution(flv_file)
         if resolution_x is None or resolution_y is None:
             logging.error(f"无法获取视频分辨率，跳过转换: {os.path.basename(flv_file)}")
+            _record_failure(xml_file, flv_file)
             error_count += 1
             continue
 
@@ -164,13 +212,16 @@ def convert_danmaku():
                  else:
                      logging.info(f"保留原始 XML 文件: {os.path.basename(xml_file)} (根据配置)")
                  
+                 _clear_failure(xml_file)
                  converted_count += 1
             else:
                  logging.error(f"转换函数执行完毕但未找到输出文件: {os.path.basename(ass_file)}")
+                 _record_failure(xml_file, flv_file)
                  error_count += 1
 
         except Exception as e:
             logging.error(f"转换 XML 文件 {os.path.basename(xml_file)} 时出错: {e}")
+            _record_failure(xml_file, flv_file)
             error_count += 1
 
     logging.info(f"弹幕转换完成。成功: {converted_count}, 跳过: {skipped_count}, 失败: {error_count}")
