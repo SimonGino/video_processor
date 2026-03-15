@@ -253,3 +253,48 @@ def test_orphan_flv_skipped_when_part_exists(monkeypatch, tmp_path: Path):
     # Should NOT be in orphan tracking or processed
     assert str(flv) not in _orphan_seen
     assert not (upload / "recording.mp4").exists()
+
+
+def test_encoder_retains_count_when_quarantine_fails(monkeypatch, tmp_path: Path):
+    """If moving to failed/ fails, failure count should be retained so file is skipped."""
+    from douyu2bilibili import config
+    from douyu2bilibili.encoder import encode_video, _failure_counts
+
+    processing, upload, failed = _setup_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "SKIP_VIDEO_ENCODING", False)
+    monkeypatch.setattr(config, "MAX_RETRY_COUNT", 2)
+    _reset_encoder_state()
+
+    flv = processing / "stuck.flv"
+    ass = processing / "stuck.ass"
+    flv.write_bytes(b"fake-flv")
+    ass.write_text("[Script Info]\n", encoding="utf-8")
+
+    encode_call_count = 0
+
+    def fake_run_fail(cmd, **kwargs):
+        nonlocal encode_call_count
+        encode_call_count += 1
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr="encoding error")
+
+    monkeypatch.setattr(subprocess, "run", fake_run_fail)
+
+    # Make failed/ dir read-only so quarantine move fails
+    failed.chmod(0o444)
+    try:
+        # Two runs to reach threshold
+        encode_video()
+        encode_video()
+    finally:
+        failed.chmod(0o755)
+
+    # File stays in processing (quarantine failed)
+    assert flv.exists()
+    # Counter should be retained (not cleared)
+    assert _failure_counts.get(str(flv), 0) >= config.MAX_RETRY_COUNT
+
+    # Third run: file should be skipped (count >= threshold)
+    encode_call_count = 0
+    encode_video()
+    # No new FFmpeg calls should have been made for this file
+    assert encode_call_count == 0
