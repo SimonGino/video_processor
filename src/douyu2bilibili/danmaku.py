@@ -16,8 +16,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 _failure_counts: dict[str, int] = {}
 
 
-def _quarantine_files(*file_paths: str):
-    """Move files to the failed directory for manual inspection."""
+def _quarantine_files(*file_paths: str) -> bool:
+    """Move files to the failed directory for manual inspection.
+
+    Returns True if all existing files were moved successfully.
+    """
+    all_ok = True
     for fp in file_paths:
         if not os.path.exists(fp):
             continue
@@ -27,6 +31,8 @@ def _quarantine_files(*file_paths: str):
             logging.warning(f"已隔离文件到 failed 目录: {os.path.basename(fp)}")
         except Exception as e:
             logging.error(f"隔离文件 {os.path.basename(fp)} 失败: {e}")
+            all_ok = False
+    return all_ok
 
 
 def _record_failure(key: str, *related_files: str) -> bool:
@@ -41,8 +47,8 @@ def _record_failure(key: str, *related_files: str) -> bool:
             f"文件 {os.path.basename(key)} 已连续失败 {count} 次，"
             f"达到阈值 {config.MAX_RETRY_COUNT}，移入隔离目录"
         )
-        _quarantine_files(key, *related_files)
-        _failure_counts.pop(key, None)
+        if _quarantine_files(key, *related_files):
+            _failure_counts.pop(key, None)
         return True
     logging.info(f"文件 {os.path.basename(key)} 失败计数: {count}/{config.MAX_RETRY_COUNT}")
     return False
