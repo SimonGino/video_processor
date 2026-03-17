@@ -46,7 +46,7 @@ FFMPEG_QSV_LIBVA_DRIVER_NAME = "iHD"
 
 # --- 视频处理配置 ---
 # 是否跳过视频压制步骤 (True: 跳过压制直接上传FLV, False: 压制为MP4后上传)
-SKIP_VIDEO_ENCODING = False
+SKIP_VIDEO_ENCODING = True
 # 文件处理连续失败次数阈值，超过后移入 data/failed/ 隔离
 MAX_RETRY_COUNT = 3
 # 无弹幕版本视频的标题后缀 (当跳过压制时使用)
