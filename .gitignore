@@ -13,3 +13,4 @@ tmp/
 data/
 src/__pycache__/
 src/video_processor/__pycache__/
+.alma-snapshots
