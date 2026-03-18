@@ -791,6 +791,7 @@ async def upload_to_bilibili(db: AsyncSession):
                 pending_query = select(UploadedVideo).filter(
                     UploadedVideo.upload_time.between(period_start, period_end),
                     UploadedVideo.bvid.is_(None),
+                    or_(UploadedVideo.streamer_name == streamer_name, UploadedVideo.streamer_name.is_(None)),
                 ).order_by(desc(UploadedVideo.upload_time)).limit(1)
                 pending_result = await db.execute(pending_query)
                 if pending_result.scalars().first():
