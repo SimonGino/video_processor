@@ -71,3 +71,10 @@ def test_setup_logging_recording_uses_file_handler(tmp_path, monkeypatch):
         and type(h) is not logging.StreamHandler
     ]
     assert len(file_handlers) >= 1, "recording logger should have a plain FileHandler"
+
+
+def test_uploader_uses_named_logger():
+    """uploader module should use a logger under the upload namespace."""
+    from douyu2bilibili import uploader
+    assert hasattr(uploader, "logger")
+    assert uploader.logger.name == "upload.uploader"

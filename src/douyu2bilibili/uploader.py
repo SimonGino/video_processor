@@ -27,7 +27,7 @@ from sqlalchemy import select, desc, func, and_, or_
 from .models import UploadedVideo, StreamSession # 需要导入模型
 
 # 配置日志记录
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("upload.uploader")
 
 # --- 全局变量 ---
 yaml_config = {} # 用于存储从 config.yaml 读取的配置
@@ -70,7 +70,7 @@ def _resolve_biliup_bin_path() -> Optional[str]:
             configured_path = os.path.join(_project_root(), configured_path)
         if os.path.isfile(configured_path):
             return configured_path
-        logging.warning(f"BILIUP_BIN_PATH 配置的文件不存在: {configured_path}，将尝试自动探测")
+        logger.warning(f"BILIUP_BIN_PATH 配置的文件不存在: {configured_path}，将尝试自动探测")
 
     path_bin = shutil.which("biliup")
     if path_bin:
@@ -101,7 +101,7 @@ def _resolve_biliup_cookies_path(biliup_bin_path: str) -> Optional[str]:
     if os.path.isfile(sibling_cookie):
         return sibling_cookie
 
-    logging.warning(f"未找到 biliup cookies 文件，尝试路径: {cookie_path} / {sibling_cookie}")
+    logger.warning(f"未找到 biliup cookies 文件，尝试路径: {cookie_path} / {sibling_cookie}")
     return None
 
 
@@ -116,7 +116,7 @@ def _get_biliup_runtime() -> dict[str, Optional[str]]:
 
     submit_mode = str(getattr(config, "BILIUP_SUBMIT_MODE", "app") or "app").strip()
     if submit_mode not in {"app", "b-cut-android"}:
-        logging.warning(f"BILIUP_SUBMIT_MODE={submit_mode} 不受支持，回退为 app")
+        logger.warning(f"BILIUP_SUBMIT_MODE={submit_mode} 不受支持，回退为 app")
         submit_mode = "app"
 
     line = str(getattr(config, "BILIUP_LINE", "") or "").strip() or None
@@ -131,7 +131,7 @@ def _get_biliup_runtime() -> dict[str, Optional[str]]:
 def _detect_uploader_backend() -> str:
     configured = str(getattr(config, "BILIBILI_UPLOADER_BACKEND", "auto") or "auto").strip().lower()
     if configured not in {"auto", "bilitool", "biliup_cli"}:
-        logging.warning(f"BILIBILI_UPLOADER_BACKEND={configured} 无效，回退为 auto")
+        logger.warning(f"BILIBILI_UPLOADER_BACKEND={configured} 无效，回退为 auto")
         configured = "auto"
     if configured != "auto":
         return configured
@@ -157,13 +157,13 @@ def _assign_pid_to_cgroup(pid: int) -> None:
     try:
         with open(_CGROUP_PROCS_PATH, "w") as f:
             f.write(str(pid))
-        logging.info(f"已将 biliup 进程 PID {pid} 写入 cgroup ({_CGROUP_PROCS_PATH})")
+        logger.info(f"已将 biliup 进程 PID {pid} 写入 cgroup ({_CGROUP_PROCS_PATH})")
     except Exception as e:
-        logging.warning(f"无法将 PID {pid} 写入 cgroup: {e}")
+        logger.warning(f"无法将 PID {pid} 写入 cgroup: {e}")
 
 
 def _run_biliup_cli_command(cmd: list[str]):
-    logging.info(f"执行 biliup 命令: {' '.join(shlex.quote(part) for part in cmd)}")
+    logger.info(f"执行 biliup 命令: {' '.join(shlex.quote(part) for part in cmd)}")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -177,12 +177,12 @@ def _run_biliup_cli_command(cmd: list[str]):
     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
     if result.stdout:
         for line in result.stdout.splitlines():
-            logging.info(f"[biliup] {line}")
+            logger.info(f"[biliup] {line}")
     if result.stderr:
         for line in result.stderr.splitlines():
-            logging.warning(f"[biliup stderr] {line}")
+            logger.warning(f"[biliup stderr] {line}")
     if result.returncode != 0:
-        logging.error(f"biliup 命令执行失败，退出码: {result.returncode}")
+        logger.error(f"biliup 命令执行失败，退出码: {result.returncode}")
     return result
 
 
@@ -249,16 +249,16 @@ def _handle_uploaded_file_after_success(file_path: str, file_name: str) -> None:
 
     delay_hours = _get_uploaded_file_delete_delay_hours()
     if delay_hours > 0:
-        logging.info(
+        logger.info(
             f"已启用延时删除({delay_hours}小时)，暂不删除已上传视频: {file_name}"
         )
         return
 
     try:
         os.remove(file_path)
-        logging.info(f"已删除已上传的视频: {file_name}")
+        logger.info(f"已删除已上传的视频: {file_name}")
     except OSError as e:
-        logging.warning(f"删除已上传视频失败: {e}")
+        logger.warning(f"删除已上传视频失败: {e}")
 
 
 async def cleanup_delayed_uploaded_files(db: AsyncSession) -> None:
@@ -275,7 +275,7 @@ async def cleanup_delayed_uploaded_files(db: AsyncSession) -> None:
     if not upload_dir:
         return
 
-    logging.info(
+    logger.info(
         f"开始清理延时删除到期文件（保留期: {delay_hours} 小时，截止时间: {cutoff.strftime('%Y-%m-%d %H:%M:%S')}）"
     )
 
@@ -307,20 +307,20 @@ async def cleanup_delayed_uploaded_files(db: AsyncSession) -> None:
             try:
                 os.remove(file_path)
                 deleted_count += 1
-                logging.info(f"延时删除已上传视频成功: {file_name}")
+                logger.info(f"延时删除已上传视频成功: {file_name}")
             except OSError as e:
-                logging.warning(f"延时删除已上传视频失败 {file_name}: {e}")
+                logger.warning(f"延时删除已上传视频失败 {file_name}: {e}")
 
-        logging.info(f"延时删除清理完成，共删除 {deleted_count} 个文件")
+        logger.info(f"延时删除清理完成，共删除 {deleted_count} 个文件")
     except Exception as e:
-        logging.error(f"执行延时删除清理时出错: {e}")
+        logger.error(f"执行延时删除清理时出错: {e}")
 
 
 def _biliup_check_login() -> bool:
     try:
         runtime = _get_biliup_runtime()
     except Exception as e:
-        logging.error(f"初始化 biliup 运行环境失败: {e}")
+        logger.error(f"初始化 biliup 运行环境失败: {e}")
         return False
 
     result = _run_biliup_cli_command([
@@ -372,7 +372,7 @@ def _biliup_upload_video_entry(
     result = _run_biliup_cli_command(cmd)
     output = f"{result.stdout or ''}\n{result.stderr or ''}"
     if _is_biliup_rate_limited(output, result.returncode):
-        logging.warning("biliup 上传命中频率限制 (code 21540)")
+        logger.warning("biliup 上传命中频率限制 (code 21540)")
     success = _biliup_create_submit_succeeded(output, result.returncode)
     return success, _extract_biliup_bvid(output)
 
@@ -384,7 +384,7 @@ def _get_upload_semaphore() -> asyncio.Semaphore:
         if max_concurrent < 1:
             max_concurrent = 1
         _upload_semaphore = asyncio.Semaphore(max_concurrent)
-        logging.info(f"上传并发控制信号量已创建，最大并发数: {max_concurrent}")
+        logger.info(f"上传并发控制信号量已创建，最大并发数: {max_concurrent}")
     return _upload_semaphore
 
 
@@ -401,7 +401,7 @@ def _biliup_append_video_entry_with_status(
 ) -> tuple[bool, bool]:
     runtime = _get_biliup_runtime()
     if part_title:
-        logging.info("biliup append 当前版本未提供分P标题参数，将使用文件名作为分P标题")
+        logger.info("biliup append 当前版本未提供分P标题参数，将使用文件名作为分P标题")
 
     cmd = [
         runtime["bin"],
@@ -418,7 +418,7 @@ def _biliup_append_video_entry_with_status(
     output = f"{result.stdout or ''}\n{result.stderr or ''}"
     rate_limited = _is_biliup_rate_limited(output, result.returncode)
     if rate_limited:
-        logging.warning("biliup 追加分P命中频率限制 (code 21540)")
+        logger.warning("biliup 追加分P命中频率限制 (code 21540)")
     return _biliup_append_submit_succeeded(output, result.returncode), rate_limited
 
 
@@ -444,7 +444,7 @@ def get_timestamp_from_filename(filepath):
         timestamp_str = filename.split('录播')[-1].split('.')[0].replace('T', ' ')
         return datetime.strptime(timestamp_str, '%Y-%m-%d %H_%M_%S')
     except (IndexError, ValueError) as e:
-        logging.warning(f"无法从文件名 {filename} 解析时间戳: {e}，将使用当前时间。")
+        logger.warning(f"无法从文件名 {filename} 解析时间戳: {e}，将使用当前时间。")
         return datetime.now()
 
 def _reset_yaml_globals():
@@ -462,15 +462,15 @@ def load_yaml_config():
         with open(config.YAML_CONFIG_PATH, 'r', encoding='utf-8') as f:
             yaml_config = yaml.safe_load(f)
             if not isinstance(yaml_config, dict):
-                logging.error(f"读取 {config.YAML_CONFIG_PATH} 失败: 文件内容不是有效的 YAML 字典格式。")
+                logger.error(f"读取 {config.YAML_CONFIG_PATH} 失败: 文件内容不是有效的 YAML 字典格式。")
                 _reset_yaml_globals()
                 return False
-            logging.info(f"成功加载配置文件: {config.YAML_CONFIG_PATH}")
+            logger.info(f"成功加载配置文件: {config.YAML_CONFIG_PATH}")
 
             # --- 解析 streamers 配置 ---
             streamers_raw = yaml_config.get('streamers')
             if not isinstance(streamers_raw, dict) or not streamers_raw:
-                logging.error(f"配置文件 {config.YAML_CONFIG_PATH} 中缺少 'streamers' 或格式错误。")
+                logger.error(f"配置文件 {config.YAML_CONFIG_PATH} 中缺少 'streamers' 或格式错误。")
                 _reset_yaml_globals()
                 return False
 
@@ -481,25 +481,25 @@ def load_yaml_config():
 
             for streamer_name, streamer_data in streamers_raw.items():
                 if not isinstance(streamer_data, dict):
-                    logging.error(f"主播 '{streamer_name}' 的配置格式错误，应为字典。")
+                    logger.error(f"主播 '{streamer_name}' 的配置格式错误，应为字典。")
                     valid = False
                     continue
 
                 room_id = streamer_data.get('room_id')
                 if not room_id:
-                    logging.error(f"主播 '{streamer_name}' 缺少 'room_id'。")
+                    logger.error(f"主播 '{streamer_name}' 缺少 'room_id'。")
                     valid = False
                     continue
 
                 upload_data = streamer_data.get('upload', {})
                 if not isinstance(upload_data, dict):
-                    logging.error(f"主播 '{streamer_name}' 的 'upload' 配置格式错误。")
+                    logger.error(f"主播 '{streamer_name}' 的 'upload' 配置格式错误。")
                     valid = False
                     continue
 
                 missing_keys = [k for k in required_upload_keys if k not in upload_data]
                 if missing_keys:
-                    logging.error(
+                    logger.error(
                         f"主播 '{streamer_name}' 的 upload 配置缺少以下必要字段: {', '.join(missing_keys)}"
                     )
                     valid = False
@@ -507,7 +507,7 @@ def load_yaml_config():
 
                 title = upload_data.get('title', '')
                 if '{time}' not in title:
-                    logging.warning(
+                    logger.warning(
                         f"主播 '{streamer_name}' 的 'title' ('{title}') 不包含 '{{time}}' 占位符。将使用固定标题。"
                     )
 
@@ -534,19 +534,19 @@ def load_yaml_config():
             if isinstance(global_upload, dict):
                 upload_global_config.update(global_upload)
 
-            logging.info(f"已加载 {len(streamer_configs)} 个主播配置: {list(streamer_configs.keys())}")
+            logger.info(f"已加载 {len(streamer_configs)} 个主播配置: {list(streamer_configs.keys())}")
             return True
 
     except FileNotFoundError:
-        logging.error(f"配置文件 {config.YAML_CONFIG_PATH} 未找到。请确保该文件存在。")
+        logger.error(f"配置文件 {config.YAML_CONFIG_PATH} 未找到。请确保该文件存在。")
         _reset_yaml_globals()
         return False
     except yaml.YAMLError as e:
-        logging.error(f"解析配置文件 {config.YAML_CONFIG_PATH} 时出错: {e}")
+        logger.error(f"解析配置文件 {config.YAML_CONFIG_PATH} 时出错: {e}")
         _reset_yaml_globals()
         return False
     except Exception as e:
-        logging.error(f"加载配置文件时发生未知错误: {e}")
+        logger.error(f"加载配置文件时发生未知错误: {e}")
         _reset_yaml_globals()
         return False
 
@@ -562,24 +562,24 @@ async def upload_to_bilibili(db: AsyncSession):
 
     global yaml_config, streamer_configs
     if not yaml_config or not streamer_configs:
-        logging.error("Bilibili 上传配置 (config.yaml) 未成功加载，跳过上传步骤。")
+        logger.error("Bilibili 上传配置 (config.yaml) 未成功加载，跳过上传步骤。")
         return
 
     is_skip_encoding = config.SKIP_VIDEO_ENCODING
     if is_skip_encoding:
-        logging.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将寻找并上传 FLV 文件")
+        logger.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将寻找并上传 FLV 文件")
         video_extension = "flv"
         title_suffix = config.NO_DANMAKU_TITLE_SUFFIX
     else:
-        logging.info("将寻找并上传压制后的 MP4 文件")
+        logger.info("将寻找并上传压制后的 MP4 文件")
         video_extension = "mp4"
         title_suffix = config.DANMAKU_TITLE_SUFFIX
 
-    logging.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
+    logger.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
     total_uploaded = 0
     total_errors = 0
     uploader_backend = _detect_uploader_backend()
-    logging.info(f"B站上传后端: {uploader_backend}")
+    logger.info(f"B站上传后端: {uploader_backend}")
     rate_limit_cooldown_seconds = max(0, int(getattr(config, "BILIUP_RATE_LIMIT_COOLDOWN_SECONDS", 300)))
     append_rate_limit_max_retries = max(0, int(getattr(config, "BILIUP_RATE_LIMIT_APPEND_MAX_RETRIES", 1)))
 
@@ -589,24 +589,24 @@ async def upload_to_bilibili(db: AsyncSession):
     try:
         if uploader_backend == "biliup_cli":
             if not await _biliup_check_login_async():
-                logging.error("biliup 登录验证失败，请检查 cookies.json 文件是否有效。")
+                logger.error("biliup 登录验证失败，请检查 cookies.json 文件是否有效。")
                 return
-            logging.info("biliup 登录验证成功。")
+            logger.info("biliup 登录验证成功。")
         else:
             if LoginController is None:
-                logging.error("未安装 bilitool，且当前上传后端配置为 bilitool")
+                logger.error("未安装 bilitool，且当前上传后端配置为 bilitool")
                 return
             login_controller = LoginController()
             if not login_controller.check_bilibili_login():
-                logging.error("Bilibili 登录验证失败，请检查 cookies.json 文件是否有效或已生成。")
+                logger.error("Bilibili 登录验证失败，请检查 cookies.json 文件是否有效或已生成。")
                 return
-            logging.info("Bilibili 登录验证成功。")
+            logger.info("Bilibili 登录验证成功。")
     except Exception as e:
-        logging.error(f"检查 Bilibili 登录状态时出错: {e}")
+        logger.error(f"检查 Bilibili 登录状态时出错: {e}")
         return
 
     if uploader_backend != "biliup_cli" and not config.API_ENABLED:
-        logging.error("API 功能未配置或明确禁用，无法执行上传")
+        logger.error("API 功能未配置或明确禁用，无法执行上传")
         return
 
     if uploader_backend == "bilitool":
@@ -616,10 +616,10 @@ async def upload_to_bilibili(db: AsyncSession):
     # 2. 获取所有待上传的视频文件
     all_video_files = glob.glob(os.path.join(config.UPLOAD_FOLDER, f"*.{video_extension}"))
     if not all_video_files:
-        logging.info(f"在上传目录中没有找到 {video_extension.upper()} 文件，无需上传。")
+        logger.info(f"在上传目录中没有找到 {video_extension.upper()} 文件，无需上传。")
         return
 
-    logging.info(f"上传目录中共找到 {len(all_video_files)} 个 {video_extension.upper()} 文件")
+    logger.info(f"上传目录中共找到 {len(all_video_files)} 个 {video_extension.upper()} 文件")
 
     # 3. 按主播分组文件
     streamer_names = list(streamer_configs.keys())
@@ -635,7 +635,7 @@ async def upload_to_bilibili(db: AsyncSession):
                 matched = True
                 break
         if not matched:
-            logging.warning(f"文件 {file_name} 不匹配任何已配置主播，跳过")
+            logger.warning(f"文件 {file_name} 不匹配任何已配置主播，跳过")
             unmatched_files.append(file_path)
 
     # 4. 遍历每个主播执行上传
@@ -645,12 +645,12 @@ async def upload_to_bilibili(db: AsyncSession):
             continue
 
         streamer_upload_config = streamer_configs[streamer_name]
-        logging.info(f"=== 开始处理主播 [{streamer_name}] 的 {len(video_files)} 个文件 ===")
+        logger.info(f"=== 开始处理主播 [{streamer_name}] 的 {len(video_files)} 个文件 ===")
 
         try:
             video_files.sort(key=get_timestamp_from_filename)
         except Exception as e:
-            logging.error(f"根据时间戳排序文件时出错: {e}，将按默认顺序处理。")
+            logger.error(f"根据时间戳排序文件时出错: {e}，将按默认顺序处理。")
 
         # 筛选未上传的文件
         video_info_list = []
@@ -661,17 +661,17 @@ async def upload_to_bilibili(db: AsyncSession):
                 query = select(UploadedVideo).filter(UploadedVideo.first_part_filename == file_name)
                 result = await db.execute(query)
                 if result.scalars().first():
-                    logging.info(f"文件 {file_name} 已有上传记录，跳过")
+                    logger.info(f"文件 {file_name} 已有上传记录，跳过")
                 else:
                     video_info_list.append({'path': file_path, 'filename': file_name, 'timestamp': timestamp})
             except Exception as e:
-                logging.error(f"检查文件 {file_name} 是否已上传时出错: {e}")
+                logger.error(f"检查文件 {file_name} 是否已上传时出错: {e}")
 
         if not video_info_list:
-            logging.info(f"主播 [{streamer_name}] 没有未上传的视频文件")
+            logger.info(f"主播 [{streamer_name}] 没有未上传的视频文件")
             continue
 
-        logging.info(f"主播 [{streamer_name}] 待上传 {len(video_info_list)} 个文件")
+        logger.info(f"主播 [{streamer_name}] 待上传 {len(video_info_list)} 个文件")
 
         # 获取该主播的直播场次
         try:
@@ -695,15 +695,15 @@ async def upload_to_bilibili(db: AsyncSession):
             all_sessions = list(complete_sessions)
             if current_session:
                 all_sessions.append(current_session)
-                logging.info(f"主播 [{streamer_name}] 发现当前正在进行的直播，开始于: {current_session.start_time}")
+                logger.info(f"主播 [{streamer_name}] 发现当前正在进行的直播，开始于: {current_session.start_time}")
 
             if not all_sessions:
-                logging.warning(f"主播 [{streamer_name}] 没有可用的直播场次记录，无法划分直播场次")
+                logger.warning(f"主播 [{streamer_name}] 没有可用的直播场次记录，无法划分直播场次")
                 continue
 
-            logging.info(f"主播 [{streamer_name}] 共获取到 {len(all_sessions)} 条直播场次记录")
+            logger.info(f"主播 [{streamer_name}] 共获取到 {len(all_sessions)} 条直播场次记录")
         except Exception as e:
-            logging.error(f"获取主播 [{streamer_name}] 直播场次信息时出错: {e}")
+            logger.error(f"获取主播 [{streamer_name}] 直播场次信息时出错: {e}")
             continue
 
         # 将视频分配到场次
@@ -733,14 +733,14 @@ async def upload_to_bilibili(db: AsyncSession):
                     assigned = True
                     break
             if not assigned:
-                logging.warning(f"无法确定视频 {video_info['filename']} 所属的直播场次，将保存到未分配列表")
+                logger.warning(f"无法确定视频 {video_info['filename']} 所属的直播场次，将保存到未分配列表")
                 unassigned_videos.append(video_info)
 
         if not session_videos and not unassigned_videos:
-            logging.info(f"主播 [{streamer_name}] 没有视频能够匹配到任何直播场次")
+            logger.info(f"主播 [{streamer_name}] 没有视频能够匹配到任何直播场次")
             continue
 
-        logging.info(f"主播 [{streamer_name}] 视频已分组到 {len(session_videos)} 个直播场次，另有 {len(unassigned_videos)} 个视频无法分配")
+        logger.info(f"主播 [{streamer_name}] 视频已分组到 {len(session_videos)} 个直播场次，另有 {len(unassigned_videos)} 个视频无法分配")
 
         # 处理每个场次的上传
         for session_id, session_data in session_videos.items():
@@ -755,7 +755,7 @@ async def upload_to_bilibili(db: AsyncSession):
             session_result = await db.execute(session_query)
             session = session_result.scalars().first()
 
-            logging.info(f"主播 [{streamer_name}] 开始处理直播场次 ID:{session_id} 的 {len(videos)} 个视频")
+            logger.info(f"主播 [{streamer_name}] 开始处理直播场次 ID:{session_id} 的 {len(videos)} 个视频")
 
             period_start = session.start_time - session_time_buffer
             period_end = (session.end_time or datetime.now()) + session_time_buffer
@@ -772,7 +772,7 @@ async def upload_to_bilibili(db: AsyncSession):
             existing_bvid = None
             if existing_record:
                 existing_bvid = existing_record.bvid
-                logging.info(f"该直播场次已有上传记录，BVID: {existing_bvid}")
+                logger.info(f"该直播场次已有上传记录，BVID: {existing_bvid}")
 
             if not existing_bvid:
                 # 兼容旧记录（streamer_name 为 NULL），按时间范围回退查询
@@ -785,7 +785,7 @@ async def upload_to_bilibili(db: AsyncSession):
                 fallback_record = fallback_result.scalars().first()
                 if fallback_record:
                     existing_bvid = fallback_record.bvid
-                    logging.info(f"从旧记录中找到 BVID: {existing_bvid}")
+                    logger.info(f"从旧记录中找到 BVID: {existing_bvid}")
 
             if not existing_bvid:
                 pending_query = select(UploadedVideo).filter(
@@ -794,7 +794,7 @@ async def upload_to_bilibili(db: AsyncSession):
                 ).order_by(desc(UploadedVideo.upload_time)).limit(1)
                 pending_result = await db.execute(pending_query)
                 if pending_result.scalars().first():
-                    logging.info(
+                    logger.info(
                         f"直播场次 ID:{session_id} 已存在待回填BVID的上传记录，"
                         "本次跳过创建新稿件，等待BVID回填后再追加分P"
                     )
@@ -803,7 +803,7 @@ async def upload_to_bilibili(db: AsyncSession):
             if existing_bvid:
                 # --- 追加分P ---
                 bvid = existing_bvid
-                logging.info(f"将以分P形式追加视频到 BVID: {bvid}")
+                logger.info(f"将以分P形式追加视频到 BVID: {bvid}")
                 try:
                     count_query = select(func.count()).select_from(UploadedVideo).filter(
                         UploadedVideo.upload_time.between(period_start, period_end)
@@ -820,7 +820,7 @@ async def upload_to_bilibili(db: AsyncSession):
                         recheck_query = select(UploadedVideo).filter(UploadedVideo.first_part_filename == file_name)
                         recheck_result = await db.execute(recheck_query)
                         if recheck_result.scalars().first():
-                            logging.info(f"二次检查: 文件 {file_name} 已上传，跳过")
+                            logger.info(f"二次检查: 文件 {file_name} 已上传，跳过")
                             continue
 
                         try:
@@ -830,7 +830,7 @@ async def upload_to_bilibili(db: AsyncSession):
                         except Exception:
                             part_title = f"P{part_number} {title_suffix}" if is_skip_encoding else f"P{part_number}"
 
-                        logging.info(f"准备追加分P ({part_title}): {file_name}")
+                        logger.info(f"准备追加分P ({part_title}): {file_name}")
 
                         append_rate_limited = False
                         append_retry_count = 0
@@ -849,7 +849,7 @@ async def upload_to_bilibili(db: AsyncSession):
                                 break
                             if append_rate_limited and append_retry_count < append_rate_limit_max_retries:
                                 append_retry_count += 1
-                                logging.warning(
+                                logger.warning(
                                     f"追加分P命中频率限制(code 21540)，将在 {rate_limit_cooldown_seconds} 秒后重试 "
                                     f"(第 {append_retry_count}/{append_rate_limit_max_retries} 次): {file_name}"
                                 )
@@ -859,7 +859,7 @@ async def upload_to_bilibili(db: AsyncSession):
                             break
 
                         if append_success:
-                            logging.info(f"成功追加分P: {file_name}")
+                            logger.info(f"成功追加分P: {file_name}")
                             total_uploaded += 1
                             try:
                                 new_upload = UploadedVideo(
@@ -872,13 +872,13 @@ async def upload_to_bilibili(db: AsyncSession):
                                 await db.commit()
                                 _handle_uploaded_file_after_success(file_path, file_name)
                             except Exception as db_e:
-                                logging.error(f"将视频分P信息记录到数据库时出错: {db_e}")
+                                logger.error(f"将视频分P信息记录到数据库时出错: {db_e}")
                                 await db.rollback()
                         else:
-                            logging.error(f"追加分P失败: {file_name}")
+                            logger.error(f"追加分P失败: {file_name}")
                             total_errors += 1
                             if append_rate_limited:
-                                logging.warning("命中B站频率限制且冷却重试已耗尽，本轮上传提前结束")
+                                logger.warning("命中B站频率限制且冷却重试已耗尽，本轮上传提前结束")
                                 abort_due_to_rate_limit = True
                                 break
 
@@ -887,11 +887,11 @@ async def upload_to_bilibili(db: AsyncSession):
                     if abort_due_to_rate_limit:
                         break
                 except Exception as e:
-                    logging.error(f"处理直播场次 ID:{session_id} 的追加分P时出错: {e}")
+                    logger.error(f"处理直播场次 ID:{session_id} 的追加分P时出错: {e}")
                     continue
             else:
                 # --- 创建新稿件 ---
-                logging.info(f"该直播场次尚未上传视频，将创建新稿件")
+                logger.info(f"该直播场次尚未上传视频，将创建新稿件")
                 first_video_info = videos[0]
                 first_video_path = first_video_info['path']
                 first_video_filename = first_video_info['filename']
@@ -906,7 +906,7 @@ async def upload_to_bilibili(db: AsyncSession):
                     title_template = streamer_upload_config['title']
                     cdn = streamer_upload_config.get('cdn')
                 except KeyError as e:
-                    logging.error(f"主播 [{streamer_name}] 缺少必要的上传参数: {e}")
+                    logger.error(f"主播 [{streamer_name}] 缺少必要的上传参数: {e}")
                     continue
 
                 title = title_template
@@ -920,11 +920,11 @@ async def upload_to_bilibili(db: AsyncSession):
                     if is_skip_encoding:
                         title = f"{title} {title_suffix}"
                 except Exception as e:
-                    logging.warning(f"生成标题时出错: {e}，使用默认标题: {title}")
+                    logger.warning(f"生成标题时出错: {e}，使用默认标题: {title}")
                     if is_skip_encoding:
                         title = f"{title} {title_suffix}"
 
-                logging.info(f"上传首个视频，创建稿件。标题: {title}")
+                logger.info(f"上传首个视频，创建稿件。标题: {title}")
 
                 acquired_bvid = None
                 if uploader_backend == "biliup_cli":
@@ -934,7 +934,7 @@ async def upload_to_bilibili(db: AsyncSession):
                             desc=video_desc, tag=tag, source=source, cover=cover, dynamic=dynamic,
                         )
                     except Exception as cli_e:
-                        logging.error(f"调用 biliup 上传失败: {cli_e}")
+                        logger.error(f"调用 biliup 上传失败: {cli_e}")
                         upload_result = False
                 else:
                     upload_result = upload_controller.upload_video_entry(
@@ -944,7 +944,7 @@ async def upload_to_bilibili(db: AsyncSession):
                     )
 
                 if upload_result:
-                    logging.info(f"成功上传首个视频: {first_video_filename}")
+                    logger.info(f"成功上传首个视频: {first_video_filename}")
                     total_uploaded += 1
                     try:
                         new_upload = UploadedVideo(
@@ -957,11 +957,11 @@ async def upload_to_bilibili(db: AsyncSession):
                         await db.commit()
                         await db.refresh(new_upload)
                         record_id = new_upload.id
-                        logging.info(f"已将视频信息记录到数据库 (ID: {record_id}, 标题: {title}, BVID: {acquired_bvid or '暂无'})")
+                        logger.info(f"已将视频信息记录到数据库 (ID: {record_id}, 标题: {title}, BVID: {acquired_bvid or '暂无'})")
                         _handle_uploaded_file_after_success(first_video_path, first_video_filename)
 
                         if uploader_backend == "bilitool":
-                            logging.info("上传成功，等待15秒后尝试获取BVID...")
+                            logger.info("上传成功，等待15秒后尝试获取BVID...")
                             await asyncio.sleep(15)
                             acquired_bvid = None
                             for attempt in range(3):
@@ -975,31 +975,31 @@ async def upload_to_bilibili(db: AsyncSession):
                                     if acquired_bvid:
                                         new_upload.bvid = acquired_bvid
                                         await db.commit()
-                                        logging.info(f"已更新BVID为 {acquired_bvid}")
+                                        logger.info(f"已更新BVID为 {acquired_bvid}")
                                         break
                                     else:
-                                        logging.warning(f"第 {attempt+1} 次尝试未获取到BVID，5秒后重试...")
+                                        logger.warning(f"第 {attempt+1} 次尝试未获取到BVID，5秒后重试...")
                                         await asyncio.sleep(5)
                                 except Exception as api_e:
-                                    logging.error(f"获取BVID时出错: {api_e}")
+                                    logger.error(f"获取BVID时出错: {api_e}")
                                     await asyncio.sleep(5)
                             if not acquired_bvid:
-                                logging.warning("无法获取BVID，等待下次运行")
+                                logger.warning("无法获取BVID，等待下次运行")
                                 continue
                             if len(videos) > 1:
-                                logging.info(f"已获取BVID: {acquired_bvid}，将在下次运行时追加剩余 {len(videos)-1} 个分P")
+                                logger.info(f"已获取BVID: {acquired_bvid}，将在下次运行时追加剩余 {len(videos)-1} 个分P")
                         else:
                             if acquired_bvid:
-                                logging.info(f"biliup 已直接返回 BVID: {acquired_bvid}")
+                                logger.info(f"biliup 已直接返回 BVID: {acquired_bvid}")
                                 if len(videos) > 1:
-                                    logging.info(f"下次运行时将继续追加剩余 {len(videos)-1} 个分P")
+                                    logger.info(f"下次运行时将继续追加剩余 {len(videos)-1} 个分P")
                             else:
-                                logging.warning("biliup 上传成功但未解析到BVID，请稍后人工确认")
+                                logger.warning("biliup 上传成功但未解析到BVID，请稍后人工确认")
                     except Exception as db_e:
-                        logging.error(f"将视频信息记录到数据库或获取BVID时出错: {db_e}")
+                        logger.error(f"将视频信息记录到数据库或获取BVID时出错: {db_e}")
                         await db.rollback()
                 else:
-                    logging.error(f"上传首个视频失败: {first_video_filename}")
+                    logger.error(f"上传首个视频失败: {first_video_filename}")
                     total_errors += 1
 
             if abort_due_to_rate_limit:
@@ -1010,26 +1010,26 @@ async def upload_to_bilibili(db: AsyncSession):
 
     file_type = "FLV" if is_skip_encoding else "MP4"
     if abort_due_to_rate_limit:
-        logging.info(f"Bilibili {file_type} 视频上传提前结束（触发频率限制）。成功: {total_uploaded}，失败: {total_errors}")
+        logger.info(f"Bilibili {file_type} 视频上传提前结束（触发频率限制）。成功: {total_uploaded}，失败: {total_errors}")
     else:
-        logging.info(f"Bilibili {file_type} 视频上传完成。成功: {total_uploaded}，失败: {total_errors}")
+        logger.info(f"Bilibili {file_type} 视频上传完成。成功: {total_uploaded}，失败: {total_errors}")
 
 
 async def update_video_bvids(db: AsyncSession):
     """检查并更新数据库中缺失BVID的视频记录 (直接操作数据库)"""
-    logging.info("开始检查和更新缺失BVID的视频记录...")
+    logger.info("开始检查和更新缺失BVID的视频记录...")
     if _detect_uploader_backend() == "biliup_cli":
-        logging.info("当前使用 biliup CLI 上传后端（创建稿件时通常可直接拿到BVID），跳过旧 API 回填任务")
+        logger.info("当前使用 biliup CLI 上传后端（创建稿件时通常可直接拿到BVID），跳过旧 API 回填任务")
         return
     
     try:
         # 1. 检查登录状态，确保能调用B站API
         if LoginController is None or FeedController is None:
-            logging.error("未安装 bilitool，无法执行旧 API 的 BVID 回填")
+            logger.error("未安装 bilitool，无法执行旧 API 的 BVID 回填")
             return
         login_controller = LoginController()
         if not login_controller.check_bilibili_login():
-            logging.error("Bilibili 登录验证失败，无法更新BVID信息")
+            logger.error("Bilibili 登录验证失败，无法更新BVID信息")
             return
             
         feed_controller = FeedController()
@@ -1043,12 +1043,12 @@ async def update_video_bvids(db: AsyncSession):
             no_bvid_records = result.scalars().all()
             
             if not no_bvid_records:
-                logging.info("没有找到需要更新BVID的视频记录")
+                logger.info("没有找到需要更新BVID的视频记录")
                 return
                 
-            logging.info(f"找到 {len(no_bvid_records)} 条缺失BVID的记录，尝试更新...")
+            logger.info(f"找到 {len(no_bvid_records)} 条缺失BVID的记录，尝试更新...")
         except Exception as db_e:
-            logging.error(f"从数据库获取缺失BVID记录时出错: {db_e}")
+            logger.error(f"从数据库获取缺失BVID记录时出错: {db_e}")
             return
         
         # 3. 调用B站API获取视频列表
@@ -1065,10 +1065,10 @@ async def update_video_bvids(db: AsyncSession):
                 all_videos.update(videos_published)
                 
             if not all_videos:
-                logging.warning("未从B站API获取到任何视频信息")
+                logger.warning("未从B站API获取到任何视频信息")
                 return
                 
-            logging.info(f"从B站API获取到 {len(all_videos)} 条视频信息")
+            logger.info(f"从B站API获取到 {len(all_videos)} 条视频信息")
             
             # 4. 根据标题匹配更新BVID
             updated_count = 0
@@ -1098,23 +1098,23 @@ async def update_video_bvids(db: AsyncSession):
                         bvid_exists = bvid_result.scalars().first()
 
                         if bvid_exists:
-                            logging.warning(f"尝试更新 BVID {found_bvid} 失败，因为它已被记录 ID:{bvid_exists.id} 使用")
+                            logger.warning(f"尝试更新 BVID {found_bvid} 失败，因为它已被记录 ID:{bvid_exists.id} 使用")
                             continue # 跳过此记录
 
                         # 更新记录
                         record.bvid = found_bvid
                         await db.commit()
                         await db.refresh(record)
-                        logging.info(f"成功更新记录 ID:{record_id}, 标题:'{record_title}' 的BVID为 {found_bvid}")
+                        logger.info(f"成功更新记录 ID:{record_id}, 标题:'{record_title}' 的BVID为 {found_bvid}")
                         updated_count += 1
                     except Exception as update_e:
-                         logging.error(f"更新记录 ID:{record_id} 的BVID ({found_bvid}) 时数据库出错: {update_e}")
+                         logger.error(f"更新记录 ID:{record_id} 的BVID ({found_bvid}) 时数据库出错: {update_e}")
                          await db.rollback() # 出错时回滚
             
-            logging.info(f"BVID更新完成，共更新了 {updated_count}/{len(no_bvid_records)} 条记录")
+            logger.info(f"BVID更新完成，共更新了 {updated_count}/{len(no_bvid_records)} 条记录")
             
         except Exception as e:
-            logging.error(f"调用B站API获取视频列表或更新BVID时出错: {e}")
+            logger.error(f"调用B站API获取视频列表或更新BVID时出错: {e}")
     
     except Exception as e:
-        logging.error(f"更新视频BVID过程中发生错误: {e}")
+        logger.error(f"更新视频BVID过程中发生错误: {e}")
