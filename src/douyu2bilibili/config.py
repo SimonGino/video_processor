@@ -91,8 +91,16 @@ DANMAKU_WS_RECONNECT_BASE_DELAY = 2
 DELETE_UPLOADED_FILES = True
 # 启用 DELETE_UPLOADED_FILES 时，延迟删除本地文件的保留时长（小时）。
 # 设为 0 表示上传成功后立即删除；建议保留一段时间以应对审核失败后重传。
-# 该值同时用于 service.sh 日志文件的保留时间（超过此时间的归档日志将被自动清理）。
 DELETE_UPLOADED_FILES_DELAY_HOURS = 24
+
+# --- 日志配置 ---
+# 日志级别 (DEBUG / INFO / WARNING / ERROR)，可通过环境变量 LOG_LEVEL 覆盖
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# 日志目录 (绝对路径)
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+# 日志文件保留天数
+LOG_RETENTION_DAYS = 3
+
 # 是否启用定时任务中的 BVID 更新与上传 (不影响手动 /run_upload_tasks)
 SCHEDULED_UPLOAD_ENABLED = True
 
