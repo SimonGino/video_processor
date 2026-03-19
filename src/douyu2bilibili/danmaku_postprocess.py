@@ -1,7 +1,7 @@
 import re
 import logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("pipeline.danmaku_post")
 
 # Styles whose events are subject to display-area clipping
 _CLIPPABLE_STYLES = {"R2L"}
@@ -71,7 +71,7 @@ def postprocess_ass(ass_file, resolution_y, display_area=1.0, opacity=0.8, color
         f.write("\n".join(result))
 
     if removed_count > 0:
-        logging.info(f"弹幕后处理：移除了 {removed_count} 条超出显示区域的滚动弹幕")
+        logger.info(f"弹幕后处理：移除了 {removed_count} 条超出显示区域的滚动弹幕")
 
 
 def _extract_style(dialogue_line):
