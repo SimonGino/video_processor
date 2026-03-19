@@ -8,8 +8,7 @@ import sys
 
 from . import config
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("pipeline.encoder")
 
 # Module-level failure counter: {file_path: consecutive_failure_count}
 _failure_counts: dict[str, int] = {}
@@ -29,9 +28,9 @@ def _quarantine_files(*file_paths: str) -> bool:
         dest = os.path.join(config.FAILED_FOLDER, os.path.basename(fp))
         try:
             shutil.move(fp, dest)
-            logging.warning(f"已隔离文件到 failed 目录: {os.path.basename(fp)}")
+            logger.warning(f"已隔离文件到 failed 目录: {os.path.basename(fp)}")
         except Exception as e:
-            logging.error(f"隔离文件 {os.path.basename(fp)} 失败: {e}")
+            logger.error(f"隔离文件 {os.path.basename(fp)} 失败: {e}")
             all_ok = False
     return all_ok
 
@@ -44,14 +43,14 @@ def _record_failure(key: str, *related_files: str) -> bool:
     _failure_counts[key] = _failure_counts.get(key, 0) + 1
     count = _failure_counts[key]
     if count >= config.MAX_RETRY_COUNT:
-        logging.warning(
+        logger.warning(
             f"文件 {os.path.basename(key)} 已连续失败 {count} 次，"
             f"达到阈值 {config.MAX_RETRY_COUNT}，移入隔离目录"
         )
         if _quarantine_files(key, *related_files):
             _failure_counts.pop(key, None)
         return True
-    logging.info(f"文件 {os.path.basename(key)} 失败计数: {count}/{config.MAX_RETRY_COUNT}")
+    logger.info(f"文件 {os.path.basename(key)} 失败计数: {count}/{config.MAX_RETRY_COUNT}")
     return False
 
 
@@ -91,30 +90,30 @@ def _qsv_init_hw_device():
 
 def encode_video():
     """压制带有 ASS 弹幕的 FLV 视频为 MP4"""
-    logging.info("开始处理视频文件...")
+    logger.info("开始处理视频文件...")
     
     # Check if video encoding should be skipped
     if config.SKIP_VIDEO_ENCODING:
-        logging.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过压制步骤直接处理 FLV 文件")
+        logger.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过压制步骤直接处理 FLV 文件")
         moved_count = 0
         skipped_count = 0
         error_count = 0
         
         # Find all FLV files
         flv_pattern = os.path.join(config.PROCESSING_FOLDER, "*.flv")
-        logging.info(f"正在搜索 FLV 文件，使用模式: {flv_pattern}")
+        logger.info(f"正在搜索 FLV 文件，使用模式: {flv_pattern}")
         flv_files = glob.glob(flv_pattern)
         
         if not flv_files:
-            logging.warning(f"在处理目录 {config.PROCESSING_FOLDER} 中未找到任何 FLV 文件")
+            logger.warning(f"在处理目录 {config.PROCESSING_FOLDER} 中未找到任何 FLV 文件")
             # Try listing directory contents to check for permission issues
             try:
                 dir_content = os.listdir(config.PROCESSING_FOLDER)
-                logging.info(f"目录内容: {dir_content[:10]}{'...' if len(dir_content) > 10 else ''}")
+                logger.info(f"目录内容: {dir_content[:10]}{'...' if len(dir_content) > 10 else ''}")
             except Exception as e:
-                logging.error(f"无法列出目录内容: {e}")
+                logger.error(f"无法列出目录内容: {e}")
         else:
-            logging.info(f"找到 {len(flv_files)} 个 FLV 文件: {[os.path.basename(f) for f in flv_files]}")
+            logger.info(f"找到 {len(flv_files)} 个 FLV 文件: {[os.path.basename(f) for f in flv_files]}")
         
         for flv_file in flv_files:
             try:
@@ -122,25 +121,25 @@ def encode_video():
                 # Keep .flv extension for target path
                 upload_flv_file = os.path.join(config.UPLOAD_FOLDER, os.path.basename(flv_file))
                 
-                logging.info(f"处理文件: {os.path.basename(flv_file)}")
+                logger.info(f"处理文件: {os.path.basename(flv_file)}")
                 
                 # Check if FLV file is currently being recorded
                 flv_part_file = flv_file + ".part"
                 if os.path.exists(flv_part_file):
-                    logging.info(f"跳过处理，因为找到正在录制的文件: {os.path.basename(flv_part_file)}")
+                    logger.info(f"跳过处理，因为找到正在录制的文件: {os.path.basename(flv_part_file)}")
                     skipped_count += 1
                     continue
                 
                 # Check file size
                 try:
                     file_size = os.path.getsize(flv_file)
-                    logging.info(f"文件大小: {file_size / (1024*1024):.2f} MB")
+                    logger.info(f"文件大小: {file_size / (1024*1024):.2f} MB")
                 except Exception as e:
-                    logging.error(f"获取文件大小失败: {e}")
+                    logger.error(f"获取文件大小失败: {e}")
                     
                 # Check if FLV file already exists in upload directory
                 if os.path.exists(upload_flv_file):
-                    logging.info(f"FLV 文件已存在于上传目录，跳过处理: {os.path.basename(upload_flv_file)}")
+                    logger.info(f"FLV 文件已存在于上传目录，跳过处理: {os.path.basename(upload_flv_file)}")
                     skipped_count += 1
                     continue
                     
@@ -148,54 +147,54 @@ def encode_video():
                 if not os.path.exists(config.UPLOAD_FOLDER):
                     try:
                         os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
-                        logging.info(f"创建上传目录: {config.UPLOAD_FOLDER}")
+                        logger.info(f"创建上传目录: {config.UPLOAD_FOLDER}")
                     except Exception as e:
-                        logging.error(f"创建上传目录失败: {e}")
+                        logger.error(f"创建上传目录失败: {e}")
                         error_count += 1
                         continue
                         
                 # Check file permissions
                 try:
                     if not os.access(flv_file, os.R_OK):
-                        logging.error(f"没有权限读取文件: {flv_file}")
+                        logger.error(f"没有权限读取文件: {flv_file}")
                         xml_file = os.path.splitext(flv_file)[0] + ".xml"
                         _record_failure(flv_file, xml_file)
                         error_count += 1
                         continue
 
                     if not os.access(config.UPLOAD_FOLDER, os.W_OK):
-                        logging.error(f"没有权限写入上传目录: {config.UPLOAD_FOLDER}")
+                        logger.error(f"没有权限写入上传目录: {config.UPLOAD_FOLDER}")
                         xml_file = os.path.splitext(flv_file)[0] + ".xml"
                         _record_failure(flv_file, xml_file)
                         error_count += 1
                         continue
                 except Exception as e:
-                    logging.error(f"检查文件权限时出错: {e}")
+                    logger.error(f"检查文件权限时出错: {e}")
                 
                 # Move FLV file directly to upload directory
                 try:
-                    logging.info(f"准备移动文件: {os.path.basename(flv_file)} -> {config.UPLOAD_FOLDER}")
+                    logger.info(f"准备移动文件: {os.path.basename(flv_file)} -> {config.UPLOAD_FOLDER}")
                     shutil.move(flv_file, upload_flv_file)  # 使用 move 直接移动文件
-                    logging.info(f"成功移动文件到: {upload_flv_file}")
+                    logger.info(f"成功移动文件到: {upload_flv_file}")
                     _clear_failure(flv_file)
                     moved_count += 1
                 except Exception as e:
-                    logging.error(f"移动文件 {os.path.basename(flv_file)} 到上传目录失败: {e}")
+                    logger.error(f"移动文件 {os.path.basename(flv_file)} 到上传目录失败: {e}")
                     xml_file = os.path.splitext(flv_file)[0] + ".xml"
                     _record_failure(flv_file, xml_file)
                     error_count += 1
             except Exception as e:
-                logging.error(f"处理文件 {os.path.basename(flv_file) if 'flv_file' in locals() else '未知'} 时发生未知错误: {e}")
+                logger.error(f"处理文件 {os.path.basename(flv_file) if 'flv_file' in locals() else '未知'} 时发生未知错误: {e}")
                 if 'flv_file' in locals():
                     xml_file = os.path.splitext(flv_file)[0] + ".xml"
                     _record_failure(flv_file, xml_file)
                 error_count += 1
         
-        logging.info(f"直接处理 FLV 文件完成。成功: {moved_count}, 跳过: {skipped_count}, 失败: {error_count}")
+        logger.info(f"直接处理 FLV 文件完成。成功: {moved_count}, 跳过: {skipped_count}, 失败: {error_count}")
         return
     
     # Original video encoding logic below
-    logging.info("开始压制视频...")
+    logger.info("开始压制视频...")
     encoded_count = 0
     skipped_count = 0
     error_count = 0
@@ -212,39 +211,39 @@ def encode_video():
 
         # Skip files that have already reached the failure threshold
         if _failure_counts.get(flv_file, 0) >= config.MAX_RETRY_COUNT:
-            logging.info(f"文件 {os.path.basename(flv_file)} 已达失败阈值，跳过")
+            logger.info(f"文件 {os.path.basename(flv_file)} 已达失败阈值，跳过")
             skipped_count += 1
             continue
 
         # Check if FLV file exists
         if not os.path.exists(flv_file):
-            logging.warning(f"找不到对应的 FLV 文件，跳过压制: {os.path.basename(flv_file)} (ASS: {os.path.basename(ass_file)})")
+            logger.warning(f"找不到对应的 FLV 文件，跳过压制: {os.path.basename(flv_file)} (ASS: {os.path.basename(ass_file)})")
             skipped_count += 1
             continue
 
         # Check if final MP4 file already exists in upload directory
         if os.path.exists(upload_mp4_file):
-            logging.info(f"MP4 文件已存在于上传目录，跳过压制: {os.path.basename(upload_mp4_file)}")
+            logger.info(f"MP4 文件已存在于上传目录，跳过压制: {os.path.basename(upload_mp4_file)}")
             # If final file exists, also consider deleting ass and flv in processing folder
             try:
                 if os.path.exists(ass_file):
                     os.remove(ass_file)
-                    logging.info(f"已删除已处理的 ASS: {os.path.basename(ass_file)}")
+                    logger.info(f"已删除已处理的 ASS: {os.path.basename(ass_file)}")
                 if os.path.exists(flv_file):
                     os.remove(flv_file)
-                    logging.info(f"已删除已处理的 FLV: {os.path.basename(flv_file)}")
+                    logger.info(f"已删除已处理的 FLV: {os.path.basename(flv_file)}")
             except OSError as e:
-                logging.warning(f"删除已存在于上传目录的视频对应的原始文件时出错: {e}")
+                logger.warning(f"删除已存在于上传目录的视频对应的原始文件时出错: {e}")
             skipped_count += 1
             continue
         
         # If temp MP4 file exists (possibly from interrupted encoding), delete it first
         if os.path.exists(temp_mp4_file):
-            logging.warning(f"发现上次残留的临时 MP4 文件，将删除: {os.path.basename(temp_mp4_file)}")
+            logger.warning(f"发现上次残留的临时 MP4 文件，将删除: {os.path.basename(temp_mp4_file)}")
             try:
                 os.remove(temp_mp4_file)
             except OSError as e:
-                logging.error(f"删除残留的临时 MP4 文件失败: {e}, 跳过此文件压制。")
+                logger.error(f"删除残留的临时 MP4 文件失败: {e}, 跳过此文件压制。")
                 error_count += 1
                 continue
 
@@ -266,8 +265,8 @@ def encode_video():
             f'-y {shlex.quote(temp_mp4_file)}' # Output to temp file
         )
 
-        logging.info(f"开始压制: {os.path.basename(flv_file)} + {os.path.basename(ass_file)} -> {os.path.basename(temp_mp4_file)}")
-        logging.debug(f"执行 FFmpeg 命令: {qsv_cmd_str}")
+        logger.info(f"开始压制: {os.path.basename(flv_file)} + {os.path.basename(ass_file)} -> {os.path.basename(temp_mp4_file)}")
+        logger.debug(f"执行 FFmpeg 命令: {qsv_cmd_str}")
 
         # Hardware-only fallback encoders for environments where QSV is unavailable.
         fallback_cmds = []
@@ -306,7 +305,7 @@ def encode_video():
                 if not is_qsv_error:
                     raise
 
-                logging.warning("QSV 不可用，尝试使用备用硬件编码器压制（不使用 CPU 编码兜底）")
+                logger.warning("QSV 不可用，尝试使用备用硬件编码器压制（不使用 CPU 编码兜底）")
                 # Clean up possibly corrupted output before fallback
                 if os.path.exists(temp_mp4_file):
                     try:
@@ -315,13 +314,13 @@ def encode_video():
                         pass
 
                 if not fallback_cmds:
-                    logging.error("未找到可用的备用硬件编码器，已停止压制（已禁用 CPU/libx264 兜底）")
+                    logger.error("未找到可用的备用硬件编码器，已停止压制（已禁用 CPU/libx264 兜底）")
                     raise e
 
                 last_exc: subprocess.CalledProcessError | None = None
                 for encoder_name, cmd_str in fallback_cmds:
                     try:
-                        logging.info(f"使用备用编码器压制: {encoder_name}")
+                        logger.info(f"使用备用编码器压制: {encoder_name}")
                         cmd_list = shlex.split(cmd_str)
                         process = subprocess.run(
                             cmd_list,
@@ -335,7 +334,7 @@ def encode_video():
                         break
                     except subprocess.CalledProcessError as e2:
                         last_exc = e2
-                        logging.warning(f"备用编码器失败: {encoder_name} (code={e2.returncode})")
+                        logger.warning(f"备用编码器失败: {encoder_name} (code={e2.returncode})")
                         if os.path.exists(temp_mp4_file):
                             try:
                                 os.remove(temp_mp4_file)
@@ -344,64 +343,64 @@ def encode_video():
                 else:
                     raise last_exc if last_exc else e
 
-            logging.info(f"成功压制到临时文件: {os.path.basename(temp_mp4_file)}")
-            logging.debug(f"FFmpeg stdout:\n{process.stdout}")
-            logging.debug(f"FFmpeg stderr:\n{process.stderr}")
+            logger.info(f"成功压制到临时文件: {os.path.basename(temp_mp4_file)}")
+            logger.debug(f"FFmpeg stdout:\n{process.stdout}")
+            logger.debug(f"FFmpeg stderr:\n{process.stderr}")
 
             # After successful encoding, move to upload directory
             try:
-                logging.info(f"准备移动文件: {os.path.basename(temp_mp4_file)} -> {config.UPLOAD_FOLDER}")
+                logger.info(f"准备移动文件: {os.path.basename(temp_mp4_file)} -> {config.UPLOAD_FOLDER}")
                 shutil.move(temp_mp4_file, upload_mp4_file)
-                logging.info(f"成功移动文件到: {upload_mp4_file}")
+                logger.info(f"成功移动文件到: {upload_mp4_file}")
 
                 # After successful move, delete original flv and ass files
                 try:
                     if config.DELETE_UPLOADED_FILES:
                         os.remove(flv_file)
-                        logging.info(f"已删除原始 FLV: {os.path.basename(flv_file)} (根据配置)")
+                        logger.info(f"已删除原始 FLV: {os.path.basename(flv_file)} (根据配置)")
                         
                         if os.path.exists(ass_file):
                             os.remove(ass_file)
-                            logging.info(f"已删除原始 ASS: {os.path.basename(ass_file)} (根据配置)")
+                            logger.info(f"已删除原始 ASS: {os.path.basename(ass_file)} (根据配置)")
                     else:
-                        logging.info(f"保留原始 FLV: {os.path.basename(flv_file)} (根据配置)")
+                        logger.info(f"保留原始 FLV: {os.path.basename(flv_file)} (根据配置)")
                         
                         if os.path.exists(ass_file):
-                            logging.info(f"保留原始 ASS: {os.path.basename(ass_file)} (根据配置)")
+                            logger.info(f"保留原始 ASS: {os.path.basename(ass_file)} (根据配置)")
                     
                     _clear_failure(flv_file)
                     encoded_count += 1 # Only count as success when fully complete
                 except OSError as e:
-                    logging.warning(f"移动文件成功，但删除原始文件时出错 ({os.path.basename(flv_file)} / {os.path.basename(ass_file)}): {e}")
+                    logger.warning(f"移动文件成功，但删除原始文件时出错 ({os.path.basename(flv_file)} / {os.path.basename(ass_file)}): {e}")
                     # Even if deletion fails, encoding and move were successful
                     _clear_failure(flv_file)
                     encoded_count += 1
 
             except Exception as e: # Catch all exceptions during move
-                logging.error(f"移动文件 {os.path.basename(temp_mp4_file)} 到上传目录失败: {e}")
+                logger.error(f"移动文件 {os.path.basename(temp_mp4_file)} 到上传目录失败: {e}")
                 _record_failure(flv_file, ass_file)
                 error_count += 1
                 # If move fails, try to delete temp MP4 file, keep original files
                 try:
                     if os.path.exists(temp_mp4_file):
                          os.remove(temp_mp4_file)
-                         logging.info(f"已删除移动失败的临时 MP4 文件: {os.path.basename(temp_mp4_file)}")
+                         logger.info(f"已删除移动失败的临时 MP4 文件: {os.path.basename(temp_mp4_file)}")
                 except OSError as del_e:
-                     logging.warning(f"删除移动失败的临时 MP4 文件时也出错: {del_e}")
+                     logger.warning(f"删除移动失败的临时 MP4 文件时也出错: {del_e}")
 
 
         except FileNotFoundError:
-             logging.error(f"找不到 ffmpeg 命令，请检查 config.py 中的 FFMPEG_PATH 设置或确保 ffmpeg 在系统 PATH 中。")
+             logger.error(f"找不到 ffmpeg 命令，请检查 config.py 中的 FFMPEG_PATH 设置或确保 ffmpeg 在系统 PATH 中。")
              _record_failure(flv_file, ass_file)
              error_count += 1
         except subprocess.CalledProcessError as e:
-            logging.error(f"运行 ffmpeg 压制视频时出错 (文件: {os.path.basename(flv_file)}): {e}")
-            logging.error(f"FFmpeg return code: {e.returncode}")
-            logging.error(f"FFmpeg stdout:\n{e.stdout}")
-            logging.error(f"FFmpeg stderr:\n{e.stderr}")
+            logger.error(f"运行 ffmpeg 压制视频时出错 (文件: {os.path.basename(flv_file)}): {e}")
+            logger.error(f"FFmpeg return code: {e.returncode}")
+            logger.error(f"FFmpeg stdout:\n{e.stdout}")
+            logger.error(f"FFmpeg stderr:\n{e.stderr}")
             stderr = e.stderr or ""
             if ("No such filter" in stderr) and ("subtitles" in stderr or "ass" in stderr):
-                logging.error(
+                logger.error(
                     "当前 FFmpeg 未启用 libass，无法 burn-in ASS 弹幕。macOS/Homebrew 建议安装 `ffmpeg-full`，"
                     "并在 config.py 里把 `FFMPEG_PATH` 指向 `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`。"
                 )
@@ -411,21 +410,21 @@ def encode_video():
             if os.path.exists(temp_mp4_file):
                  try:
                       os.remove(temp_mp4_file)
-                      logging.info(f"已删除压制失败产生的临时 MP4: {os.path.basename(temp_mp4_file)}")
+                      logger.info(f"已删除压制失败产生的临时 MP4: {os.path.basename(temp_mp4_file)}")
                  except OSError as del_e:
-                      logging.warning(f"删除压制失败的临时 MP4 文件时出错: {del_e}")
+                      logger.warning(f"删除压制失败的临时 MP4 文件时出错: {del_e}")
 
         except Exception as e:
-            logging.error(f"压制视频时发生未知错误 (文件: {os.path.basename(flv_file)}): {e}")
+            logger.error(f"压制视频时发生未知错误 (文件: {os.path.basename(flv_file)}): {e}")
             _record_failure(flv_file, ass_file)
             error_count += 1
             # Also try to clean up temp files
             if os.path.exists(temp_mp4_file):
                  try:
                       os.remove(temp_mp4_file)
-                      logging.info(f"已删除因未知错误产生的临时 MP4: {os.path.basename(temp_mp4_file)}")
+                      logger.info(f"已删除因未知错误产生的临时 MP4: {os.path.basename(temp_mp4_file)}")
                  except OSError as del_e:
-                      logging.warning(f"删除因未知错误产生的临时 MP4 文件时出错: {del_e}")
+                      logger.warning(f"删除因未知错误产生的临时 MP4 文件时出错: {del_e}")
 
     # --- Orphan FLV passthrough: process FLVs without XML/ASS ---
     all_flv_files = glob.glob(os.path.join(config.PROCESSING_FOLDER, "*.flv"))
@@ -462,7 +461,7 @@ def encode_video():
         # First sighting: mark and skip (wait one cycle to avoid race with XML writer)
         if flv_file not in _orphan_seen:
             _orphan_seen.add(flv_file)
-            logging.info(
+            logger.info(
                 f"发现无弹幕 FLV: {os.path.basename(flv_file)}，"
                 f"等待下一轮确认后处理（避免与弹幕写入竞态）"
             )
@@ -470,14 +469,14 @@ def encode_video():
 
         # Second sighting: confirmed orphan, encode without subtitles
         _orphan_seen.discard(flv_file)
-        logging.info(f"无弹幕 FLV 确认：{os.path.basename(flv_file)}，开始无弹幕编码")
+        logger.info(f"无弹幕 FLV 确认：{os.path.basename(flv_file)}，开始无弹幕编码")
 
         # Clean up leftover temp file
         if os.path.exists(temp_mp4_file):
             try:
                 os.remove(temp_mp4_file)
             except OSError as e:
-                logging.error(f"删除残留临时 MP4 失败: {e}，跳过")
+                logger.error(f"删除残留临时 MP4 失败: {e}，跳过")
                 error_count += 1
                 continue
 
@@ -525,7 +524,7 @@ def encode_video():
                 if not is_qsv_error:
                     raise
 
-                logging.warning("QSV 不可用，尝试备用硬件编码器（无弹幕模式）")
+                logger.warning("QSV 不可用，尝试备用硬件编码器（无弹幕模式）")
                 if os.path.exists(temp_mp4_file):
                     try:
                         os.remove(temp_mp4_file)
@@ -538,7 +537,7 @@ def encode_video():
                 last_exc = None
                 for encoder_name, cmd_str in fallback_cmds:
                     try:
-                        logging.info(f"使用备用编码器: {encoder_name}")
+                        logger.info(f"使用备用编码器: {encoder_name}")
                         process = subprocess.run(
                             shlex.split(cmd_str), check=True, capture_output=True,
                             text=True, encoding='utf-8', errors='replace', env=ffmpeg_env,
@@ -556,21 +555,21 @@ def encode_video():
 
             # Encoding succeeded, move to upload
             shutil.move(temp_mp4_file, upload_mp4_file)
-            logging.info(f"无弹幕编码完成并移动到上传目录: {os.path.basename(upload_mp4_file)}")
+            logger.info(f"无弹幕编码完成并移动到上传目录: {os.path.basename(upload_mp4_file)}")
 
             if config.DELETE_UPLOADED_FILES:
                 try:
                     os.remove(flv_file)
-                    logging.info(f"已删除原始 FLV: {os.path.basename(flv_file)}")
+                    logger.info(f"已删除原始 FLV: {os.path.basename(flv_file)}")
                 except OSError as e:
-                    logging.warning(f"删除原始 FLV 失败: {e}")
+                    logger.warning(f"删除原始 FLV 失败: {e}")
 
             _clear_failure(flv_file)
             orphan_count += 1
             encoded_count += 1
 
         except Exception as e:
-            logging.error(f"无弹幕编码失败 ({os.path.basename(flv_file)}): {e}")
+            logger.error(f"无弹幕编码失败 ({os.path.basename(flv_file)}): {e}")
             _record_failure(flv_file)
             error_count += 1
             if os.path.exists(temp_mp4_file):
@@ -580,6 +579,6 @@ def encode_video():
                     pass
 
     if orphan_count:
-        logging.info(f"无弹幕 FLV 直通处理完成: {orphan_count} 个")
+        logger.info(f"无弹幕 FLV 直通处理完成: {orphan_count} 个")
 
-    logging.info(f"视频压制与移动完成。成功: {encoded_count}, 跳过: {skipped_count}, 失败: {error_count}")
+    logger.info(f"视频压制与移动完成。成功: {encoded_count}, 跳过: {skipped_count}, 失败: {error_count}")
