@@ -4,7 +4,7 @@ from typing import Optional
 
 import aiohttp
 
-logger = logging.getLogger("stream_monitor")
+logger = logging.getLogger("monitor.stream")
 
 # Shared request headers for Douyu API
 _DOUYU_HEADERS = {

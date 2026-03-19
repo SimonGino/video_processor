@@ -105,7 +105,7 @@ class StreamStartRequest(BaseModel):
 
 # =================== FastAPI App ===================
 
-logger = logging.getLogger("app")
+logger = logging.getLogger("monitor.app")
 
 app = FastAPI(
     title="视频处理 API",
