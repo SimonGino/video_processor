@@ -7,7 +7,7 @@ from .danmaku_collector import DouyuDanmakuCollector
 from .ffmpeg_recorder import FfmpegRecorder
 
 
-logger = logging.getLogger("segment_pipeline")
+logger = logging.getLogger("recording.segment")
 
 
 def _finalize_part_path(part_path: str | Path) -> Path:
