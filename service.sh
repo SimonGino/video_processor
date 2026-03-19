@@ -47,47 +47,6 @@ check_uv() {
     fi
 }
 
-# 从 config.py 读取日志保留时间（小时），失败则返回 24
-get_log_retention_hours() {
-    local hours
-    hours=$(cd "$SCRIPT_DIR" && uv run python -c "from douyu2bilibili.config import DELETE_UPLOADED_FILES_DELAY_HOURS; print(DELETE_UPLOADED_FILES_DELAY_HOURS)" 2>/dev/null)
-    if [ -z "$hours" ] || ! [[ "$hours" =~ ^[0-9]+$ ]]; then
-        echo "24"
-    else
-        echo "$hours"
-    fi
-}
-
-# 清理过期的归档日志文件
-clean_old_logs() {
-    local retention_hours
-    retention_hours=$(get_log_retention_hours)
-    local retention_minutes=$((retention_hours * 60))
-    find "$SCRIPT_DIR" -maxdepth 1 -name "${SERVICE_NAME}*.log.*" -type f -mmin +"${retention_minutes}" -delete 2>/dev/null
-}
-
-# 日志按日期轮转（在守护循环内调用，stdout 已重定向到日志文件）
-rotate_log_if_needed() {
-    local log_file="$1"
-    [ ! -f "$log_file" ] && return
-
-    local file_date today
-    if [[ "$(uname)" == "Darwin" ]]; then
-        file_date=$(stat -f "%Sm" -t "%Y-%m-%d" "$log_file" 2>/dev/null)
-    else
-        file_date=$(date -r "$log_file" "+%Y-%m-%d" 2>/dev/null)
-    fi
-    today=$(date "+%Y-%m-%d")
-
-    if [ -n "$file_date" ] && [ "$file_date" != "$today" ]; then
-        local archive="${log_file}.${file_date}"
-        mv "$log_file" "$archive"
-        # 重新打开 stdout/stderr 到新日志文件
-        exec >> "$log_file" 2>&1
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 日志轮转: $(basename "$log_file") -> $(basename "$archive")"
-    fi
-}
-
 # 检查守护进程是否运行
 is_supervisor_running() {
     local pid_file="$1"
@@ -140,10 +99,6 @@ _run_supervisor() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 开始守护 ${label} (PID: $$)"
 
     while true; do
-        # 日志轮转和清理
-        rotate_log_if_needed "$log_file"
-        clean_old_logs
-
         # 启动子进程
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] 启动 ${label}..."
         "${cmd[@]}" &
@@ -200,9 +155,6 @@ start_service() {
     [ ! -f "pyproject.toml" ] && { print_error "未找到 pyproject.toml"; exit 1; }
     [ ! -f "app.py" ] && { print_error "未找到 app.py"; exit 1; }
     [ ! -f "$RECORDING_SCRIPT" ] && { print_error "未找到 $RECORDING_SCRIPT"; exit 1; }
-
-    # 启动前清理过期日志
-    clean_old_logs
 
     # 启动主服务守护循环
     nohup "$SELF" _supervise main >> "$MAIN_LOG_FILE" 2>&1 &
@@ -359,6 +311,19 @@ logs_service() {
     else
         print_warning "日志不存在: $REC_LOG_FILE"
     fi
+
+    # Python application logs
+    local log_dir="$SCRIPT_DIR/logs"
+    for log_name in upload pipeline monitor recording; do
+        local log_file="$log_dir/${log_name}.log"
+        echo ""
+        echo -e "${BLUE}=== ${log_name} 日志 (最后 $lines 行) ===${NC}"
+        if [ -f "$log_file" ]; then
+            tail -n "$lines" "$log_file"
+        else
+            print_warning "日志不存在: $log_file"
+        fi
+    done
 }
 
 # systemd 配置
