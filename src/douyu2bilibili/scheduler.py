@@ -12,8 +12,9 @@ from .uploader import load_yaml_config, upload_to_bilibili, update_video_bvids
 from .models import StreamSession, local_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
-scheduler_logger = logging.getLogger("scheduler")
-logger = logging.getLogger("app")
+upload_logger = logging.getLogger("upload.scheduler")
+pipeline_logger = logging.getLogger("pipeline.scheduler")
+monitor_logger = logging.getLogger("monitor.session")
 
 
 def _get_app_deps():
@@ -29,7 +30,7 @@ async def scheduled_video_processing():
     """Video processing pipeline: cleanup, danmaku conversion, encoding (scheduled task)."""
     _, _, stream_monitors = _get_app_deps()
 
-    scheduler_logger.info("定时任务：开始执行视频处理流程...")
+    pipeline_logger.info("定时任务：开始执行视频处理流程...")
     loop = asyncio.get_running_loop()
     start_time = time.time()
 
@@ -38,40 +39,40 @@ async def scheduled_video_processing():
         any_live = False
         for name, monitor in stream_monitors.items():
             if monitor.is_live():
-                scheduler_logger.info(f"定时任务：检测到主播 {name} 正在直播中")
+                pipeline_logger.info(f"定时任务：检测到主播 {name} 正在直播中")
                 any_live = True
         if any_live:
-            scheduler_logger.info("当前配置为仅下播后处理，跳过压制任务")
+            pipeline_logger.info("当前配置为仅下播后处理，跳过压制任务")
             return
-        scheduler_logger.info("定时任务：所有主播当前均不在直播，将继续执行压制任务")
+        pipeline_logger.info("定时任务：所有主播当前均不在直播，将继续执行压制任务")
 
     # Check skip encoding config
     is_skip_encoding = config.SKIP_VIDEO_ENCODING
     if is_skip_encoding:
-        scheduler_logger.info("定时任务：检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过弹幕压制步骤，直接处理 FLV 文件")
+        pipeline_logger.info("定时任务：检测到 SKIP_VIDEO_ENCODING=True 配置，将跳过弹幕压制步骤，直接处理 FLV 文件")
 
     try:
-        scheduler_logger.info("定时任务：执行文件清理...")
+        pipeline_logger.info("定时任务：执行文件清理...")
         await loop.run_in_executor(None, cleanup_small_files)
 
         if not is_skip_encoding:
-            scheduler_logger.info("定时任务：执行弹幕转换...")
+            pipeline_logger.info("定时任务：执行弹幕转换...")
             await loop.run_in_executor(None, convert_danmaku)
         else:
-            scheduler_logger.info("定时任务：已配置跳过压制，不执行弹幕转换")
+            pipeline_logger.info("定时任务：已配置跳过压制，不执行弹幕转换")
 
-        scheduler_logger.info("定时任务：处理视频文件...")
+        pipeline_logger.info("定时任务：处理视频文件...")
         await loop.run_in_executor(None, encode_video)
 
-        scheduler_logger.info("定时任务：视频处理任务完成。")
+        pipeline_logger.info("定时任务：视频处理任务完成。")
     except asyncio.CancelledError:
-        scheduler_logger.info("定时任务：视频处理任务在应用关闭过程中被取消")
+        pipeline_logger.info("定时任务：视频处理任务在应用关闭过程中被取消")
         return
     except Exception as e:
-        scheduler_logger.error(f"定时任务：视频处理任务执行过程中出错: {e}", exc_info=True)
+        pipeline_logger.error(f"定时任务：视频处理任务执行过程中出错: {e}", exc_info=True)
 
     end_time = time.time()
-    scheduler_logger.info(f"定时任务：视频处理流程执行完毕。耗时: {end_time - start_time:.2f} 秒。")
+    pipeline_logger.info(f"定时任务：视频处理流程执行完毕。耗时: {end_time - start_time:.2f} 秒。")
 
 
 async def scheduled_upload():
@@ -79,32 +80,32 @@ async def scheduled_upload():
     AsyncSessionLocal, _, _ = _get_app_deps()
 
     if not getattr(config, "SCHEDULED_UPLOAD_ENABLED", True):
-        scheduler_logger.info("定时任务：已禁用定时上传，跳过 BVID 更新和视频上传任务")
+        upload_logger.info("定时任务：已禁用定时上传，跳过 BVID 更新和视频上传任务")
         return
 
-    scheduler_logger.info("定时任务：开始执行上传流程...")
+    upload_logger.info("定时任务：开始执行上传流程...")
     start_time = time.time()
 
     async with AsyncSessionLocal() as db:
         try:
             if not load_yaml_config():
-                scheduler_logger.error("定时任务：无法加载 YAML 配置，跳过上传任务。")
+                upload_logger.error("定时任务：无法加载 YAML 配置，跳过上传任务。")
                 return
-            scheduler_logger.info("定时任务：执行 BVID 更新...")
+            upload_logger.info("定时任务：执行 BVID 更新...")
             await update_video_bvids(db)
-            scheduler_logger.info("定时任务：执行视频上传...")
+            upload_logger.info("定时任务：执行视频上传...")
             await upload_to_bilibili(db)
-            scheduler_logger.info("定时任务：上传任务完成。")
+            upload_logger.info("定时任务：上传任务完成。")
         except asyncio.CancelledError:
-            scheduler_logger.info("定时任务：上传任务在应用关闭过程中被取消")
+            upload_logger.info("定时任务：上传任务在应用关闭过程中被取消")
             return
         except Exception as e:
-            scheduler_logger.error(f"定时任务：上传任务执行过程中出错: {e}", exc_info=True)
+            upload_logger.error(f"定时任务：上传任务执行过程中出错: {e}", exc_info=True)
         finally:
             await db.close()
 
     end_time = time.time()
-    scheduler_logger.info(f"定时任务：上传流程执行完毕。耗时: {end_time - start_time:.2f} 秒。")
+    upload_logger.info(f"定时任务：上传流程执行完毕。耗时: {end_time - start_time:.2f} 秒。")
 
 
 async def scheduled_log_stream_end(streamer_name: str):
@@ -117,7 +118,7 @@ async def scheduled_log_stream_end(streamer_name: str):
 
     monitor = stream_monitors.get(streamer_name)
     if not monitor:
-        scheduler_logger.error(f"定时任务(log_stream_end): 未找到主播 {streamer_name} 的监控实例")
+        monitor_logger.error(f"定时任务(log_stream_end): 未找到主播 {streamer_name} 的监控实例")
         return
 
     current_time = local_now()
@@ -144,21 +145,21 @@ async def scheduled_log_stream_end(streamer_name: str):
                         )
                         db.add(new_session)
                         await db.commit()
-                        scheduler_logger.info(
+                        monitor_logger.info(
                             f"主播 {streamer_name} 在线但无 open session，已自动创建 "
                             f"(start_time={adjusted_start_time}，已调整-{config.STREAM_START_TIME_ADJUSTMENT}分钟)"
                         )
                     else:
-                        scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: 直播中")
+                        monitor_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: 直播中")
                 except Exception as e:
-                    scheduler_logger.error(f"定时任务(log_stream_end): 检查/创建启动 session 时出错: {e}", exc_info=True)
+                    monitor_logger.error(f"定时任务(log_stream_end): 检查/创建启动 session 时出错: {e}", exc_info=True)
                     await db.rollback()
         else:
-            scheduler_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: 未直播")
+            monitor_logger.debug(f"主播 {streamer_name} 状态未变化，仍为: 未直播")
         return
 
     old_status, new_status = change
-    scheduler_logger.info(
+    monitor_logger.info(
         f"检测到主播 {streamer_name} 状态变化: "
         f"{'未直播→直播中' if new_status else '直播中→未直播'}"
     )
@@ -174,7 +175,7 @@ async def scheduled_log_stream_end(streamer_name: str):
                     end_time=None
                 )
                 db.add(new_session)
-                scheduler_logger.info(
+                monitor_logger.info(
                     f"已记录主播 {streamer_name} 的上播时间: {adjusted_start_time} "
                     f"(已自动调整-{config.STREAM_START_TIME_ADJUSTMENT}分钟)"
                 )
@@ -191,7 +192,7 @@ async def scheduled_log_stream_end(streamer_name: str):
 
                 if recent_session:
                     recent_session.end_time = current_time
-                    scheduler_logger.info(f"已记录主播 {streamer_name} 的下播时间: {current_time}")
+                    monitor_logger.info(f"已记录主播 {streamer_name} 的下播时间: {current_time}")
                 else:
                     new_session = StreamSession(
                         streamer_name=streamer_name,
@@ -199,14 +200,14 @@ async def scheduled_log_stream_end(streamer_name: str):
                         end_time=current_time
                     )
                     db.add(new_session)
-                    scheduler_logger.info(f"创建新记录并添加主播 {streamer_name} 的下播时间: {current_time}")
+                    monitor_logger.info(f"创建新记录并添加主播 {streamer_name} 的下播时间: {current_time}")
 
             await db.commit()
 
             # If streamer went offline and PROCESS_AFTER_STREAM_END is enabled,
             # schedule delayed processing, then upload after processing has time to finish
             if not new_status and config.PROCESS_AFTER_STREAM_END:
-                scheduler_logger.info("检测到主播下播，且已启用'仅下播后处理'选项，3分钟后触发视频处理，8分钟后触发上传")
+                monitor_logger.info("检测到主播下播，且已启用'仅下播后处理'选项，3分钟后触发视频处理，8分钟后触发上传")
                 scheduler.add_job(
                     scheduled_video_processing,
                     'date',
@@ -223,7 +224,7 @@ async def scheduled_log_stream_end(streamer_name: str):
                 )
 
         except Exception as e:
-            scheduler_logger.error(f"定时任务(log_stream_end): 记录直播状态时出错: {e}", exc_info=True)
+            monitor_logger.error(f"定时任务(log_stream_end): 记录直播状态时出错: {e}", exc_info=True)
             await db.rollback()
 
 
@@ -231,7 +232,7 @@ async def clean_stale_sessions():
     """Clean up stale stream sessions that started 24h+ ago but never got an end_time."""
     AsyncSessionLocal, _, _ = _get_app_deps()
 
-    logger.info("开始检查长时间未结束的直播会话...")
+    monitor_logger.info("开始检查长时间未结束的直播会话...")
 
     try:
         async with AsyncSessionLocal() as db:
@@ -246,7 +247,7 @@ async def clean_stale_sessions():
             stale_sessions = result.scalars().all()
 
             if not stale_sessions:
-                logger.info("没有发现长时间未结束的直播会话")
+                monitor_logger.info("没有发现长时间未结束的直播会话")
                 return
 
             for session in stale_sessions:
@@ -255,46 +256,46 @@ async def clean_stale_sessions():
                     suggested_end_time = local_now()
 
                 session.end_time = suggested_end_time
-                logger.info(f"已清理长时间未结束的会话 ID:{session.id}，设置结束时间为 {suggested_end_time}")
+                monitor_logger.info(f"已清理长时间未结束的会话 ID:{session.id}，设置结束时间为 {suggested_end_time}")
 
             await db.commit()
-            logger.info(f"成功清理 {len(stale_sessions)} 个未正常结束的直播会话")
+            monitor_logger.info(f"成功清理 {len(stale_sessions)} 个未正常结束的直播会话")
 
     except Exception as e:
-        logger.error(f"清理未结束直播会话时出错: {e}", exc_info=True)
+        monitor_logger.error(f"清理未结束直播会话时出错: {e}", exc_info=True)
 
 
 def run_processing_sync():
     """Synchronous video processing for background thread execution."""
-    logger.info("后台任务：开始执行视频处理（清理、转换、压制）...")
+    pipeline_logger.info("后台任务：开始执行视频处理（清理、转换、压制）...")
     try:
         cleanup_small_files()
 
         is_skip_encoding = config.SKIP_VIDEO_ENCODING
 
         if not is_skip_encoding:
-            logger.info("后台任务：执行弹幕转换...")
+            pipeline_logger.info("后台任务：执行弹幕转换...")
             convert_danmaku()
         else:
-            logger.info("后台任务：已配置跳过压制，不执行弹幕转换")
+            pipeline_logger.info("后台任务：已配置跳过压制，不执行弹幕转换")
 
-        logger.info("后台任务：处理视频文件...")
+        pipeline_logger.info("后台任务：处理视频文件...")
         encode_video()
 
-        logger.info("后台任务：视频处理执行完成")
+        pipeline_logger.info("后台任务：视频处理执行完成")
     except Exception as e:
-        logger.error(f"后台任务：视频处理执行过程中出错: {e}")
+        pipeline_logger.error(f"后台任务：视频处理执行过程中出错: {e}")
 
 
 async def run_upload_async(db: AsyncSession):
     """Async upload task for background execution."""
-    logger.info("后台任务：开始执行BVID更新和视频上传 (手动触发)...")
+    upload_logger.info("后台任务：开始执行BVID更新和视频上传 (手动触发)...")
     try:
         if not load_yaml_config():
-             logger.error("手动触发：无法加载 YAML 配置，跳过异步任务。")
+             upload_logger.error("手动触发：无法加载 YAML 配置，跳过异步任务。")
              return
         await update_video_bvids(db)
         await upload_to_bilibili(db)
-        logger.info("后台任务：BVID更新和视频上传执行完成 (手动触发)")
+        upload_logger.info("后台任务：BVID更新和视频上传执行完成 (手动触发)")
     except Exception as e:
-        logger.error(f"后台任务：BVID更新和视频上传执行过程中出错 (手动触发): {e}", exc_info=True)
+        upload_logger.error(f"后台任务：BVID更新和视频上传执行过程中出错 (手动触发): {e}", exc_info=True)

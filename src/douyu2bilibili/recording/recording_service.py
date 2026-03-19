@@ -12,7 +12,7 @@ from .douyu_stream_resolver import DouyuH5PlayResolver
 from .segment_pipeline import run_one_segment
 
 
-logger = logging.getLogger("recording_service")
+logger = logging.getLogger("recording.service")
 
 
 @dataclass(frozen=True)

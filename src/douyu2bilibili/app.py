@@ -16,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from . import config
+from .logging_config import setup_logging
 from .uploader import (
     load_yaml_config,
     get_timestamp_from_filename,
@@ -104,8 +105,7 @@ class StreamStartRequest(BaseModel):
 
 # =================== FastAPI App ===================
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("app")
+logger = logging.getLogger("monitor.app")
 
 app = FastAPI(
     title="视频处理 API",
@@ -130,6 +130,7 @@ stream_monitors: dict[str, StreamStatusMonitor] = {}
 
 @app.on_event("startup")
 async def startup_event():
+    setup_logging()
     logger.info("正在初始化数据库...")
     await init_db()
     logger.info("数据库初始化完成")

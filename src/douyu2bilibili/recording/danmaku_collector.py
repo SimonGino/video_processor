@@ -11,7 +11,7 @@ from .stt_codec import iter_payloads, pack
 from .xml_writer import BilibiliXmlWriter
 
 
-logger = logging.getLogger("danmaku_collector")
+logger = logging.getLogger("recording.danmaku_collector")
 
 # Douyu col field → RGB int color mapping
 _DOUYU_COLOR_MAP = {
