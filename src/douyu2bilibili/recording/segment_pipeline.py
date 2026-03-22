@@ -46,8 +46,8 @@ async def run_one_segment(
     )
 
     danmaku_task = None
-    if xml_part_path is not None:
-        xml_part = Path(xml_part_path)
+    xml_part = Path(xml_part_path) if xml_part_path is not None else None
+    if xml_part is not None:
         xml_part.parent.mkdir(parents=True, exist_ok=True)
         collector = DouyuDanmakuCollector(ws_url=ws_url, heartbeat_seconds=danmaku_heartbeat_seconds)
         danmaku_task = asyncio.create_task(
@@ -76,8 +76,7 @@ async def run_one_segment(
     if flv_part.exists():
         flv_part.replace(flv_final)
 
-    if xml_part_path is not None:
-        xml_part = Path(xml_part_path)
+    if xml_part is not None:
         xml_final = _finalize_part_path(xml_part)
         if xml_part.exists():
             xml_part.replace(xml_final)
