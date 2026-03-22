@@ -86,7 +86,7 @@ async def _run_streamer(streamer: StreamerConfig, stop_event: asyncio.Event) -> 
 
             base = _segment_base_name(streamer.name, datetime.now())
             flv_part_path = f"{config.PROCESSING_FOLDER}/{base}.flv.part"
-            xml_part_path = f"{config.PROCESSING_FOLDER}/{base}.xml.part"
+            xml_part_path = None if config.SKIP_VIDEO_ENCODING else f"{config.PROCESSING_FOLDER}/{base}.xml.part"
 
             try:
                 rc = await run_one_segment(

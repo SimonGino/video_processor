@@ -56,3 +56,31 @@ async def test_segment_pipeline_offline(tmp_path: Path):
     assert "hello" in xml.read_text(encoding="utf-8", errors="ignore")
     ET.parse(xml)
 
+
+@pytest.mark.asyncio
+async def test_segment_pipeline_skip_danmaku(tmp_path: Path):
+    """When xml_part_path is None, danmaku collection is skipped."""
+    from douyu2bilibili.recording.segment_pipeline import run_one_segment
+
+    ffmpeg_stub = Path(__file__).resolve().parents[1] / "bin" / "ffmpeg"
+    flv_part = tmp_path / "seg.flv.part"
+
+    rc = await run_one_segment(
+        room_id="1234",
+        stream_url="https://example.invalid/live.flv",
+        stream_headers={"User-Agent": "ua", "Referer": "https://www.douyu.com"},
+        flv_part_path=str(flv_part),
+        xml_part_path=None,
+        duration_seconds=1,
+        ffmpeg_path=str(ffmpeg_stub),
+        ws_url="ws://127.0.0.1:1/unused",
+    )
+
+    # FLV should be finalized
+    flv = tmp_path / "seg.flv"
+    assert flv.exists()
+
+    # No XML files should exist at all
+    xml_files = list(tmp_path.glob("*.xml*"))
+    assert xml_files == []
+
