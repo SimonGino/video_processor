@@ -23,7 +23,7 @@ async def run_one_segment(
     stream_url: str,
     stream_headers: Mapping[str, str],
     flv_part_path: str,
-    xml_part_path: str,
+    xml_part_path: str | None = None,
     duration_seconds: int,
     ffmpeg_path: str,
     ws_url: str,
@@ -32,12 +32,9 @@ async def run_one_segment(
     danmaku_ws_reconnect_base_delay: int = 2,
 ) -> int:
     flv_part = Path(flv_part_path)
-    xml_part = Path(xml_part_path)
     flv_part.parent.mkdir(parents=True, exist_ok=True)
-    xml_part.parent.mkdir(parents=True, exist_ok=True)
 
     recorder = FfmpegRecorder(ffmpeg_path=ffmpeg_path)
-    collector = DouyuDanmakuCollector(ws_url=ws_url, heartbeat_seconds=danmaku_heartbeat_seconds)
 
     record_task = asyncio.create_task(
         recorder.record(
@@ -47,32 +44,41 @@ async def run_one_segment(
             headers=stream_headers,
         )
     )
-    danmaku_task = asyncio.create_task(
-        collector.collect(
-            room_id=room_id,
-            output_path=str(xml_part),
-            duration_seconds=duration_seconds,
-            max_reconnects=danmaku_ws_max_reconnects,
-            reconnect_base_delay=danmaku_ws_reconnect_base_delay,
-        )
-    )
 
-    record_result, danmaku_result = await asyncio.gather(
-        record_task,
-        danmaku_task,
-        return_exceptions=True,
-    )
+    danmaku_task = None
+    xml_part = Path(xml_part_path) if xml_part_path is not None else None
+    if xml_part is not None:
+        xml_part.parent.mkdir(parents=True, exist_ok=True)
+        collector = DouyuDanmakuCollector(ws_url=ws_url, heartbeat_seconds=danmaku_heartbeat_seconds)
+        danmaku_task = asyncio.create_task(
+            collector.collect(
+                room_id=room_id,
+                output_path=str(xml_part),
+                duration_seconds=duration_seconds,
+                max_reconnects=danmaku_ws_max_reconnects,
+                reconnect_base_delay=danmaku_ws_reconnect_base_delay,
+            )
+        )
+
+    if danmaku_task is not None:
+        record_result, danmaku_result = await asyncio.gather(
+            record_task, danmaku_task, return_exceptions=True,
+        )
+        if isinstance(danmaku_result, Exception):
+            logger.warning("Danmaku collection failed: %s", danmaku_result)
+    else:
+        record_result = await record_task
+
     if isinstance(record_result, Exception):
         raise record_result
-    if isinstance(danmaku_result, Exception):
-        logger.warning("Danmaku collection failed: %s", danmaku_result)
 
     flv_final = _finalize_part_path(flv_part)
-    xml_final = _finalize_part_path(xml_part)
-
     if flv_part.exists():
         flv_part.replace(flv_final)
-    if xml_part.exists():
-        xml_part.replace(xml_final)
+
+    if xml_part is not None:
+        xml_final = _finalize_part_path(xml_part)
+        if xml_part.exists():
+            xml_part.replace(xml_final)
 
     return int(record_result)

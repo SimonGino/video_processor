@@ -49,10 +49,10 @@ FFMPEG_QSV_LIBVA_DRIVER_NAME = "iHD"
 SKIP_VIDEO_ENCODING = True
 # 文件处理连续失败次数阈值，超过后移入 data/failed/ 隔离
 MAX_RETRY_COUNT = 3
-# 无弹幕版本视频的标题后缀 (当跳过压制时使用)
-NO_DANMAKU_TITLE_SUFFIX = "【无弹幕版】"
-# 弹幕版本视频的标题后缀 (当不跳过压制时使用)
-DANMAKU_TITLE_SUFFIX = "【弹幕版】"
+# {danmaku_tag} placeholder value when skipping encoding
+NO_DANMAKU_TITLE_SUFFIX = "无弹幕版"
+# {danmaku_tag} placeholder value when encoding with danmaku
+DANMAKU_TITLE_SUFFIX = "弹幕版"
 
 
 # --- 调度配置 ---

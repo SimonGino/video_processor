@@ -3,7 +3,7 @@ streamers:
     room_id: "138243"
     upload:
       source: "https://www.douyu.com/138243"
-      title: "洞主直播录像{time}弹幕版"
+      title: "洞主直播录像{time}{danmaku_tag}"
       desc: |
             录播合作可以私信我
             洞主的精彩直播录像！
@@ -18,7 +18,7 @@ streamers:
     room_id: "251783"
     upload:
       source: "https://www.douyu.com/251783"
-      title: "银剑君直播录像{time}弹幕版"
+      title: "银剑君直播录像{time}{danmaku_tag}"
       desc: |
             银剑君的精彩直播录像！
             主播直播间地址：https://www.douyu.com/251783

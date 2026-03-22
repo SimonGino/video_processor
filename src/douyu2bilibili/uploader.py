@@ -569,11 +569,10 @@ async def upload_to_bilibili(db: AsyncSession):
     if is_skip_encoding:
         logger.info("检测到 SKIP_VIDEO_ENCODING=True 配置，将寻找并上传 FLV 文件")
         video_extension = "flv"
-        title_suffix = config.NO_DANMAKU_TITLE_SUFFIX
     else:
         logger.info("将寻找并上传压制后的 MP4 文件")
         video_extension = "mp4"
-        title_suffix = config.DANMAKU_TITLE_SUFFIX
+    danmaku_tag = config.NO_DANMAKU_TITLE_SUFFIX if is_skip_encoding else config.DANMAKU_TITLE_SUFFIX
 
     logger.info(f"开始检查并上传视频到 Bilibili (文件类型: {video_extension})...")
     total_uploaded = 0
@@ -827,9 +826,9 @@ async def upload_to_bilibili(db: AsyncSession):
                         try:
                             video_time = video_info['timestamp']
                             part_time_str = video_time.strftime('%H:%M:%S')
-                            part_title = f"P{part_number} {part_time_str} {title_suffix}" if is_skip_encoding else f"P{part_number} {part_time_str}"
+                            part_title = f"P{part_number} {part_time_str}"
                         except Exception:
-                            part_title = f"P{part_number} {title_suffix}" if is_skip_encoding else f"P{part_number}"
+                            part_title = f"P{part_number}"
 
                         logger.info(f"准备追加分P ({part_title}): {file_name}")
 
@@ -918,12 +917,9 @@ async def upload_to_bilibili(db: AsyncSession):
                         title = title_template.replace('{time}', formatted_time)
                     elif len(videos) > 1:
                         title = f"{title_template} (合集 {video_time.strftime('%Y-%m-%d')})"
-                    if is_skip_encoding:
-                        title = f"{title} {title_suffix}"
                 except Exception as e:
                     logger.warning(f"生成标题时出错: {e}，使用默认标题: {title}")
-                    if is_skip_encoding:
-                        title = f"{title} {title_suffix}"
+                title = title.replace('{danmaku_tag}', danmaku_tag)
 
                 logger.info(f"上传首个视频，创建稿件。标题: {title}")
 
