@@ -133,3 +133,30 @@ streamers:
     assert result is True
     assert len(config_module.STREAMERS) == 1
     assert config_module.STREAMERS[0] == {"name": "洞主", "room_id": "138243"}
+
+
+def test_danmaku_tag_placeholder_in_title(tmp_path: Path, monkeypatch):
+    from douyu2bilibili import uploader
+
+    yaml_content = """\
+streamers:
+  洞主:
+    room_id: "138243"
+    upload:
+      title: "洞主直播录像{time}{danmaku_tag}"
+      tid: 171
+      tag: "洞主,直播录像"
+      desc: "测试简介"
+      source: "https://www.douyu.com/138243"
+
+upload:
+  max_concurrent: 1
+"""
+    yaml_file = tmp_path / "config.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    monkeypatch.setattr(config_module, "YAML_CONFIG_PATH", str(yaml_file))
+
+    result = uploader.load_yaml_config()
+
+    assert result is True
+    assert "{danmaku_tag}" in uploader.streamer_configs["洞主"]["title"]
